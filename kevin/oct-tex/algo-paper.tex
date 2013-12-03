@@ -1,0 +1,1471 @@
+\documentclass{sig-alternate}
+\usepackage{times}
+\usepackage{algorithm, algorithmic}
+\usepackage{amsmath, amssymb} % , amsthm}
+\usepackage{graphicx}
+\usepackage{algorithm, algorithmic}
+% \usepackage{outlines}
+\usepackage{color}
+
+\newenvironment{tighterdescription}%
+  {\begin{description}%
+    \setlength{\itemsep}{1pt}%
+    \setlength{\parskip}{1pt}}%
+  {\end{description}}
+
+\newenvironment{tighterenumerate}%
+  {\begin{enumerate}%
+    \setlength{\itemsep}{1pt}%
+    \setlength{\parskip}{1pt}}%
+  {\end{enumerate}}
+
+\newenvironment{tighteritemize}%
+  {\begin{itemize}%
+    \setlength{\itemsep}{1pt}%
+    \setlength{\parskip}{1pt}}%
+  {\end{itemize}}
+
+\begin{document}
+
+% \newtheorem{theorem}[definition]{Theorem}
+
+\title{Notes on Alpha Algorithm}
+
+\numberofauthors{1}
+\author{three authors}
+
+\maketitle
+\begin{abstract}
+no abstract yet
+\end{abstract}
+
+\section{Attempted Overview}
+
+We are the designers/builders/users of a sketch-based Big Data system.
+We were motivated by limitations of all existing sketches to design a new
+kind of sketch. We believe that this new sketch type hits a sweet spot of speed, accuracy,
+and simplicity.
+
+A sketch must have numerous good features to be useful for us.
+This long list includes many things that everyone wants and are therefore
+always discussed in papers, such as good accuracy and low resource usage.
+However, we have some specific requirements that have been much less
+discussed in the literature, and which strongly drove our design
+process. These requirements are centered around the topic of ``set
+expression evaluation''.
+
+\begin{tighterenumerate}
+\item We want accurate answers for set expressions. Therefore:
+\begin{tighterenumerate}
+\item We do not use HLL. 
+% Although it is very space efficient when one only
+% needs to count, it doesn't support set expressions very well.
+It is known that much better support for set operations
+(i.e. more operations supported, and better accuracy achieved) is possible
+by using a sketch type that include a set of hashes
+that can be used to estimate the selectivity of a set expression.
+\item While certain commonly used rules for selectivity estimation
+discard hashes that in fact could be retained, our rule includes 
+those samples in the calculation, thus achieving better accuracy.
+\end{tighterenumerate}
+\item We want flexible evaluation of set expressions. Therefore:
+\begin{tighterenumerate}
+\item We made sure that our rule for set expression evaluation yields
+the same result even when the set expression is re-arranged to
+a logically equivalent form. (This is not true for many existing rules).
+\item We made sure that our sketch data structure is powerful enough
+to represent, with no loss of accuracy, an intermediate result in the
+evaluation of a larger set expression.
+\end{tighterenumerate}
+\end{tighterenumerate}
+
+All four of these points were achieved via a new sketch type, that is,
+a data structure with associated rules and algorithms, {\em all} of
+which are extremely simple. The data structure contains just three
+things:
+
+\begin{tighterenumerate}
+\item A user-specified parameter $k$, which is a {\em soft} target for the size of the sketch.
+\item An internal variable $\theta$, which is a threshold against which hashes can be compared.
+\item A set $S$ of hashes, specifically the set of all hashes in the stream (so far)
+which are less than $\theta$.
+\end{tighterenumerate}
+
+The size estimation rule for a sketch $(k,\theta,S)$ is simply $|S|/\theta$. 
+
+The sketch representing the output of the binary set operation
+$\Delta$ applied to sketches $(k_1,\theta_1,S_1)$ and $(k_2,\theta_2,S_2)$ is simply
+$(\infty,\theta_3=\min(\theta_1,\theta_2),\{(h < \theta_3)\in (S_1 \Delta S_2)\})$.
+
+Both of those rules are straightforward consequences of the
+relationship between $\theta$ and $S$. 
+
+% \footnote{Note to reviewers: limiting the size of the
+% output sketch would be nice, but that would sacrifice both of our
+% flexibility goals.}
+
+So far, we haven't really used $k$. Its function is to limit the amount
+of offline storage used by the system's base sketches, that is, the
+sketches constructed directly from streams.\footnote{Base sketches
+are the predominant consumers of offline storage in our system.
+``Derived Sketches'' occupy less storage, and if we tried to limit
+their size, we would sacrifice the two ``flexible evaluation'' 
+properties that were mentioned above.}
+
+Interestly, the fact that $k$ is a {\em soft} target unlocks a sketch
+construction algorithm (see Figure ??)  that is remarkably fast and
+simple.  Compared to the obvious heap-based implementation for
+constructing a KMV sketch, this algorithm uses less than $2/3$ as much
+memory, and its update time is faster by a factor of $\log k$ in
+theory, and a factor of $3$ in practice when $k=2^{16}$.
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\section{A New Algorithm for Building KMV-like Sketches}
+
+In this section we develop an algorithm that is faster and uses less
+space than a heap-based implementation of KMV (as suggested e.g. by the Beyer
+Paper), but only approximately hits the size target for the sketch.
+However, we will show that the actual size of the sketch is tightly
+concentrated around the size target, and the error bounds on the resulting
+estimates are similar to those of KMV.
+
+% \begin{center}
+% {\footnotesize
+% \begin{tabular}{|l|l|l|}
+% \hline 
+% Algorithm & time bound & space (words) \\
+% \hline
+% Standard KMV  & $O(N + k \log (U/k) \log k)$ & (1 + c) k + k \\
+% This paper    & $O(N + k \log (U/k))$        & (1 + c) k \\
+% \hline 
+% \end{tabular}}
+% \end{center}
+
+\begin{center}
+{\footnotesize
+\begin{tabular}{|l|l|l|}
+\hline 
+Sketch        & Sketch & Size \\
+Construction  & Update & in   \\
+Algorithm     &  Cost  & Memory \\
+\hline
+Heap-based & $O(\log k)$ & $c_h \cdot k + k$ \\
+This paper & $O(1)     $ & $c_h \cdot k$ \\
+\hline 
+\end{tabular}}
+\end{center}
+
+In the above table, $N$ is the number of items in the stream, $U$ is the number of unique items
+in the stream, $k$ is the ``target'' size of the sketch. $c$ is a positive constant bounded away
+from 0, that for concreteness can be thought of as being 1.
+
+\subsection{New Sketch Construction Algorithm}
+
+\subsubsection{Background and Motivation}
+
+The basic algorithm for constructing a KMV sketch uses a priority
+queue to keep track of the current k'th minimum hash value, and a
+dictionary to detect duplicate hashes. This algorithm {\em could} be implemented
+using a single data structure that supports both types of operations,
+such as a red-black tree or one of the Giroire-like ordered dictionary schemes from the algorithms
+literature. However, red-black trees are known to be slow in practice, and the
+above-mentioned ordered dictionary schemes are complicated and hence rarely used.
+
+However, there is a simple way to achieve low update times:
+simultaneously use a heap for the priority queue and a hash table for
+the dictionary [cite Beyer]. Assuming that hash values occupy a single word of
+memory, then this approach uses $k$ words for the heap, and $c_h \cdot k$ words for the hash table, 
+where the constant $c_h > 1$ provides the headroom that the hash table requires.  The sketch update time is
+dominated by the cost of updating the heap, namely $O(\log k)$.
+
+% A red-black tree would be a single data structure combining the functions of both.
+% This idea {\em could} save some space in practice. Depending on the
+% value of $c$, the heap plus hash table would occupy between $2k$ and
+% $3 \cdot k$ words, while the red-black tree would occupy $2 \cdot k$ words if an
+% array index could be stored in half a word (think 32-bit indices
+% versus 64-bit hashes).  However, the update cost for the sketch
+% would still be $O(\log k)$, and it is well known that the constant factors
+% are worse for red-black trees versus heaps.
+
+The idea for a new and more efficient algorithm for building KMV-like
+sketches can be derived via the following intuition.  Because it seems
+wasteful to be storing the same hash values in two different data
+structures, it would be nice to get rid of one of them, especially the priority
+queue, given its $O(\log k)$ update cost.  However, eliminating the
+priority queue would sacrifice the ability to efficiently keep track
+of the exact current value of $m_k$ (the $k$'th minimum value).
+One might hope that there exists a correct algorithm that can
+get by with a cheaply computable approximation of the current value of
+$m_k$. A plausible candidate for such an approximation is
+$(\frac{k}{k+1})^i$, where $i$ is the number of times that a new hash
+value has been inserted into the sketch.
+
+In the rest of this section we will describe and prove the correctness of an efficient
+new algorithm based on the above intuitions. If the dictionary is implemented using a hash table,
+then the space requirement of the new algorithm is $c_h \cdot k$ words, and its amortized update cost is $O(1)$.
+We will prove that the number of samples in the resulting sketch has expected value $k$, 
+and variance less than $\frac{k}{2} + \frac{1}{4}$.
+
+Interestingly, we designed this algorithm primarily for speed, and were anticipating
+that the newly introduced variability in $|S|$ would cause its estimates to have higher
+variance than those of KMV. However, when the new estimates were analyzed, they turned out
+to have {\em lower} variance than those of KMV, even when KMV is given one extra sample.
+See section ??.
+
+[We will also present numerical evidence, based on an exact error
+analysis evaluated using exact arithmetic, that the estimates produced
+by this sketch algorithm have expected value $n$, and variance
+$((2k+1)n^2 - (2k^2+2k+1)n + (k^2+k))/(2k^2)$, which is approximately
+$n^2/(k-\frac{1}{2})$ for $n \gg k \gg 1$.
+This variance is less than that of a KMV sketch with same target size $k$, 
+or even KMV with target size $k+1$.]
+
+Finally, we will present empirical results that are very
+similar to the above theoretical calculations. This similarity
+implies that the production-oriented hash functions that we employ
+(namely City Hash and Murmur Hash) aren't sufficiently different from
+true random values to throw off either our error analysis or our running
+time analysis. 
+
+% The new algorithm in this paper also uses a hash table, but dispenses
+% with the heap, thus saving $k$ words of space.
+% As before, the time bound contains an $O(N)$ for the cost of hashing
+% all of the stream items, and the expected number of
+% sketch-insert operations is $O(k \log \frac{U}{k})$. However, now the
+% cost of each insert is only $O(1)$ under a computational model
+% which includes unit-cost hash table operations.
+
+\subsection{The New Algorithm}
+
+The new algorithm works by keeping track of the set
+$S$ of all hash values ever seen that are less than a threshold
+$\theta$. This threshold is gradually reduced using an updating policy
+that causes the size of $S$ to be concentrated around a
+target size $k$. Pseudocode is presented as Algorithm ??. The algorithm's parameters are a
+stream $\mathcal{H}$ of hashes, a threshold updating factor $\alpha$, 
+and an initial set size $w$. These parameters were chosen to facilitate
+analysis. In practice the natural parameters are the stream $\mathcal{H}$ and 
+the target size $k$; the code as presented would be called with $w=k$ and 
+$\alpha = k/(k+1)$.
+
+\begin{algorithm}[t]
+\caption{Basic Algorithm $(\mathcal{H},\alpha,w)$}
+\label{alg:basic-algorithm}
+\begin{algorithmic}[1]{\footnotesize
+\STATE $S \leftarrow\;$ (First $w$ unique hashes in $\mathcal{H}$).
+\STATE $ \theta \leftarrow 1.0 $
+\STATE {\bf Loop:}
+\STATE \COMMENT{Invariant: $E(|S|) = \alpha/(1-\alpha)$}.
+\STATE \COMMENT{Invariant: S contains all $h < \theta$ seen so far in $\mathcal{H}$}.
+% \STATE Answer pending queries using the $(\theta,|S|)$.
+\STATE {\bf if} no more hashes in $\mathcal{H}$, {\bf return} $(\theta,|S|)$.
+\STATE $h \leftarrow\;$ next hash in $\mathcal{H}$.
+\STATE {\bf if} $h \ge \theta$, {\bf goto Loop}.
+\STATE {\bf if} $h \in S$, {\bf goto Loop}.
+\STATE $S \leftarrow S \cup \{h\}$.
+\STATE $\theta \leftarrow \alpha \cdot \theta$.
+\STATE $S \leftarrow S \setminus \{(x \ge \theta) \in S\}$.
+\STATE {\bf goto Loop.}
+}\end{algorithmic}
+\end{algorithm}
+
+\subsection{Analysis}
+
+\subsubsection{Assumptions and Notation}
+
+Hash values are modeled as iid random variables each with the
+distribution Uniform(0,1). $S$ is the set of unique hash values
+maintained by the algorithm.  $k$ is the user-specified target value
+for $|S|$.  It will be convenient to do the main analysis assuming
+that the hash values in the input stream are already unique. At the end, adjustments
+will be made to handle the possible presence of duplicates. Then
+$\mathcal{H}$ is the input stream of unique hash values $h$. The length of that
+stream is $n$. $\mathcal{H}$ is subdivided by the algorithm into
+a prefix of length $w$, which is used to initialize $S$, and 
+and a suffix of length $u = n - w$, which is processed by the algorithm's main loop.
+During this processing, Line 10 is reached a certain number of
+times; this count will be refered to as the number of insertions, and
+will be denoted by the symbol $t$ or the symbol $i$.
+
+\subsection{Analysis of Size of Sketch}
+
+This subsection contains an analysis of the size of $S$ at line 4 of algorithm 1, that is, at the top of the main loop.
+
+\subsubsection{Expected Value}
+
+% We will begin by proving that if $w = k$ and $\alpha = \frac{k}{k+1}$, then the expected 
+% size of $S$ is $k$ at the top of the loop
+
+Because $S$ was initialized with $w$ hashes in line ?? and $t$ hashes have been inserted subsequently in 
+line ??, $|S| \le w+t$. However, line ?? has also been executed $t$ times, so $\theta = \alpha^t$,
+and $S$ consists of ``surviving hashes'' $h < \alpha^t$. Let $B$ be the random variable for
+the number of surviving hashes, and let $\hat{B}$ and $B'$ be the corresponding random variables
+for surviving ``initialization'' hashes (that entered $S$ via line ??) and ``inserted hashes'' (that entered
+$S$ via line ??). Clearly $B = \hat{B} + B'$.
+
+% Now consider a specific initialization hash $h$. It is a uniform random value on the range $(0,1)$,
+% so the probability that it is less than $\theta$ is $\alpha^t$. Hence the
+
+% For an initialization hash, this occurs with probability $\alpha^t$. 
+
+Now, since the initialization hashes are iid random draws from Uniform
+$[0,1)$, the probability of each one surviving is $\alpha^t$, and the
+  probability distribution governing the number of surviving
+  initialization hashes is Binomial$(w,\alpha^t)$.\footnote{Because
+  the hashes are iid uniform deviates, their lifetimes in $S$ are iid geometric deviates. 
+  Geometric distributions are memoryless.}
+  Hence $E(\hat{B}|w,\alpha,t) = w \cdot \alpha^t$.
+
+However, the number of surviving inserted hashes is not governed by a Binomial distribution, 
+because each one has a different probability of surviving.
+% The $t$ hashes that were inserted subsequently are not 
+% because they have different probabilities of still being in $S$. 
+Consider the most recent insert. Because it passed the test in line ??, it is a uniform deviate
+on the range $[0,\alpha^{t-1})$, so its survival probability is
+$\alpha^t/\alpha^{t-1} = \alpha^1$. Similarly the survival probability of the previously inserted hash is
+$\alpha^2$, and so on back to the hash that was inserted first, 
+whose survival probability is $\alpha^t$. 
+% The resulting distribution over the number of survivors is a special case of a ``Poisson Binomial Distribution''. 
+% In a later section we will show how to calculated it using dynamic programming. 
+Hence $E(B'|\alpha,t) = \sum_{j=1}^{t} \alpha^j$, and 
+\begin{align}
+E(B|w,\alpha,t) = & E(\hat{B}|w,\alpha,t) + E(B'|\alpha,t) \\
+                = & w \cdot \alpha^t + \sum_{j=1}^{t} \alpha^j \\
+                = & w \cdot \alpha^t + \frac{\alpha - \alpha^{t+1}}{1 - \alpha}
+\end{align}
+
+\noindent After substituting in the recommended parameter values $w=k$ and $\alpha=k/(k+1)$, and doing a bit of algebra,
+one obtains:
+
+\begin{equation}
+\forall t, \;\; E(B|k,\frac{k}{k+1},t) = k.
+\end{equation}
+
+\subsubsection{Variance}
+
+For generic $w$ and $\alpha$:
+\begin{align}
+\sigma^2(B|w,\alpha,t) = & \sigma^2(\hat{B}|w,\alpha,t) + \sigma^2(B'|\alpha,t) \\
+                       = & w \alpha^t (1 - \alpha^t) + \sum_{j=1}^{t} \alpha^j (1\! -\! \alpha^j) \\
+                       = & w \;\alpha^t \;(1 - \alpha^t) \\
+                         & + \frac{\alpha + \alpha^{2(t+1)} - \alpha^{t+2} - \alpha^{t+1}}{1 - \alpha^2}
+\end{align}
+For $w=k$ and $\alpha=k/(k+1)$:
+\begin{align}
+\sigma^2(B) = & \frac{\alpha - \alpha^{2t+1}}{1 - \alpha^2} = \frac{\alpha}{1-\alpha^2}(1-\alpha^{2t}) \\
+            < & \frac{\alpha}{1-\alpha^2} = \frac{k^2+k}{2k+1} \\
+            < & \frac{k}{2} + \frac{1}{4}.
+\end{align}
+
+\noindent {\bf Corollary:} for given $n$, $k$, and $\delta$, there exists a constant $c_b$ such that, with probability $1-\delta$,
+the size of $S$ never exceeds $k \cdot c_b$ during the execution of the algorithm.
+
+\subsubsection{Distribution of Size of Sketch}
+
+Although the above expressions for $E(|S|)$ and $\sigma^2(|S|)$ are adequate for many purposes,
+the exact error analysis below requires the full probability distribution over possible values of $|S|$.
+Continuing with the above setup, for each $0 \le b \le (w+t)$
+we need to know $\mathrm{Pr}(|S| = b \;|\; w, \alpha, t)$, that is, the probability that $|S| = b$ at the top of the
+loop in Algorithm ??, given that $S$ was initialized with $w$ hashes, and that $t$ hashes have been subsequently inserted.
+Partition $S$ into subsets $\hat{S}$ and $S'$ which are respectively the surviving ``initialization'' hashes and the surviving ``inserted'' hashes,
+and let $B$, $\hat{B}$ and $B'$ be the corresponding random variables. Then:
+\begin{align}
+\mathrm{Pr}(B\!=\!b | w, \alpha, t)  = & \sum_{\hat{b}+b'=b} \left( \mathrm{Pr}(\hat{B}\!=\! \hat{b} | w, \alpha, t) + \mathrm{Pr}(B'\!=\! b'| \alpha, t) \right)\\
+\mathrm{Pr}(\hat{B}\!=\! \hat{b} | w, \alpha, t) = & \mathrm{BinomialPDF}(\hat{b}; w,\alpha^t).
+\end{align}
+
+\noindent As mentioned above, the distribution $\mathrm{Pr}(B'\;=\; b' \;|\; \alpha, t)$ is not binomial
+because each of the $t$ ``inserted'' hashes has a different survival probability.
+However, the distribution does obey the following recurrences, which can be efficiently evaluated
+using dynamic programming.
+\begin{align}
+\mathrm{Pr}(B' \!=\! 0 \;| \alpha, 0) = & 1 \\
+\mathrm{Pr}(B' \!=\! b' | \alpha,  0) = & 0 \\
+\mathrm{Pr}(B' \!=\! 0 \;| \alpha, t) = & (1 - \alpha^t) \cdot \mathrm{Pr}(B' \!=\! 0 | \alpha, t\!-\!1) \\
+\mathrm{Pr}(B' \!=\! b' | \alpha,  t) = & (1 - \alpha^t) \cdot \mathrm{Pr}(B' \!=\! b' | \alpha, t\!-\!1) \; + \\
+                                        & \quad \quad \;\; \alpha^t \cdot \mathrm{Pr}(B' \!=\! b'\!-\!1 | \alpha, t\!-\!1) 
+\end{align}
+
+% \begin{align}
+%   \mathrm{PB}(b=0,t=0) = & 1 \\
+%   \mathrm{PB}(b>0,t=0) = & 0 \\
+%   \mathrm{PB}(b=0,t>0) = & (1-\alpha^t) \cdot \mathrm{PB}(b,t\!-\!1) \\
+%   \mathrm{PB}(b>0,t>0) = & (1-\alpha^t) \cdot \mathrm{PB}(b,t\!-\!1) \; + \\
+%                          & \quad \quad \; \; \alpha^t  \cdot \mathrm{PB}(b\!-\!1,t\!-\!1)
+% \end{align}
+
+\subsection{Distribution of Estimates}
+
+Let $X$ be the random variable for the estimate produced by the algorithm. This estimate can only
+assume a finite number of different values, each of the form $b/(\alpha^i)$, where $b$ is a possible
+size of $S$, and $i$ is a possible number of insertion operations. Let $B$ and $I$ be random
+variables governing those two quantities. Then:
+\[
+\mathrm{Pr}(X = x | \alpha, w, u) =  \sum_{(b,i)|x=b/\alpha^i} \mathrm{Pr}((B\!=\!b \wedge I\!=\!i) | \alpha, w, u).
+\]
+and, by the chain rule for probabilities:
+\[
+\mathrm{Pr}((B\!=\!b \wedge I\!=\!i) | \alpha, w, u) =
+\mathrm{Pr}(B\!=\!b | \alpha, w, u, i) \cdot
+\mathrm{Pr}(I\!=\!i | \alpha, w, u) 
+\]
+
+The distribution $\mathrm{Pr}(B\!=\!b | \alpha, w, u, i)$ was analysed in the previous section. 
+The distribution $\mathrm{Pr}(I\!=\!i | \alpha, w, u)$ obeys the following recurrences, which can be efficiently
+evaluated using dynamic programming:
+\begin{align}
+\mathrm{Pr}(I \!=\! 0 | \alpha, 0) = & 1 \\
+\mathrm{Pr}(I \!=\! i | \alpha,  0) = & 0 \\
+\mathrm{Pr}(I \!=\! 0 | \alpha, u) = & (1 - \alpha^i) \cdot \mathrm{Pr}(I \!=\! 0 | \alpha, u\!-\!1) \\
+\mathrm{Pr}(I \!=\! i | \alpha,  u) = & (1 - \alpha^i) \cdot \mathrm{Pr}(I \!=\! i | \alpha, u\!-\!1) \; + \\
+                                        & \quad \quad  \alpha^{i\!-\!1} \cdot \mathrm{Pr}(I \!=\! i\!-\!1 | \alpha, u\!-\!1) 
+\end{align}
+
+% \begin{align}
+%   \mathrm{NI}(i=0,u=0) = & 1 \\
+%   \mathrm{NI}(i>0,u=0) = & 0 \\
+%   \mathrm{NI}(i=0,u>0) = & (1-\alpha^i) \cdot \mathrm{NI}(i,u\!-\!1) \\
+%   \mathrm{NI}(i>0,u>0) = & (1-\alpha^i) \cdot \mathrm{NI}(i,u\!-\!1) \; + \\
+%                          & \quad \;\;\; \alpha^{i\!-\!1} \cdot \mathrm{NI}(i\!-\!1,u\!-\!1)
+% \end{align}
+
+\subsubsection{Technical Lemmas}
+
+This subsection contains two versions of a technical lemma that will be used in the subsequent
+analysis of the mean, variance, and higher moments of the distribution of estimates.
+First we will prove a simple version of the lemma which applies to the mean.
+Then we will prove a generalized version of the lemma which applies to the variance
+and higher moments of the distribution.
+
+\noindent {\bf Simple Lemma:} The function
+\[
+f(k,u) = \sum_{i=0}^u \frac{1}{\alpha^i} \mathrm{Pr}(i|u)
+\]
+satisfies the following base case and recurrence:
+\begin{align}
+      f(k,0) = & 1 \\
+f(k,u\!+\!1) = & f(k,u) + \left(\frac{1-\alpha}{\alpha}\right) \cdot 1
+\end{align}
+\begin{proof} The base case is true by inspection. The claimed recurrence is derived from equation ?? as follows:
+\begin{align} 
+  f(k,u\!+\!1)
+= & \sum_{i=0}^{u+1} \frac{1}{\alpha^i} \mathrm{Pr}(i|u+1) \\
+= & \left[ \sum_{i=0}^{u} \frac{1}{\alpha^i} (1-\alpha^i) \mathrm{Pr}(i|u) \right] + 0 \\
+  & \quad + 0 + \left[ \sum_{i=1}^{u+1} \frac{1}{\alpha^i} (\alpha^{i-1}) \mathrm{Pr}(i\!-\!1|u) \right]
+\end{align}
+\noindent Now we will evaluate the two bracketed sums, repeatedly noting that probability distributions sum to 1.
+For the first bracketed sum:
+\begin{equation}
+\sum_{i=0}^u \frac{1}{\alpha^i} \mathrm{Pr}(i|u) - \sum_{i=0}^u \frac{\alpha^i}{\alpha^i} \mathrm{Pr}(i|u) = f(k,u) - 1
+\end{equation}
+
+\noindent Next we evaluate the second bracketed sum, after performing the change of variables $j = i\!-\!1$:
+\begin{equation}
+\sum_{j=0}^{u} \frac{\alpha^j}{\alpha^{j+1}} \mathrm{Pr}(j|u) = \frac{1}{\alpha} \cdot 1
+\end{equation}
+
+Finally, combining ?? and ?? yields the claimed result:
+\begin{equation}
+  f(k,u\!+\!1) = f(k,u) - 1 + \frac{1}{\alpha} \cdot 1 = f(k,u) + \left(\frac{1-\alpha}{\alpha}\right) \cdot 1
+\end{equation}
+\end{proof}
+
+\noindent {\bf Corollary of Simple Lemma}: For all $u \in Z^+$:
+\begin{equation}
+f(k,u) = \frac{k+u}{k}
+\end{equation}
+\begin{proof}
+$\frac{k+u}{k}$ satisfies the same base case and recurrence as $f(k,u)$.
+The base case (eqn ??) can be verified by inspection. The recurrence (eqn ??) can be verified as follows:
+\begin{equation}
+\frac{k+(u+1)}{k} = \frac{k+u}{k} + \frac{1-\alpha}{\alpha} \cdot 1 = \frac{k+u}{k} + \frac{1}{k}.
+\end{equation}
+\end{proof}
+
+\noindent {\bf Generalized Lemma:} If $g(q,k,u) = \sum_{i=0}^u \frac{1}{\alpha^{qi}} \mathrm{Pr}(i|u)$, then
+\begin{align}
+% g(q,k,u+1) = g(q,k,u) + (\frac{1}{\alpha^q} - 1) \cdot g(q-1,k,u). \\
+g(0,k,u) = & \;1 \quad \quad \quad [by\;inspection] \\
+g(q,k,0) = & \;1 \quad \quad \quad [by\;inspection] \\
+g(q,k,u\!+\!1) = & g(q,k,u) + \left(\frac{1-\alpha^q}{\alpha^q}\right) \cdot g(q\!-\!1,k,u)
+\end{align}
+\begin{proof}
+Omitted. This proof is basically the same as the proof of the Simplified Lemma. It is just necessary to verify that the
+exponents all work out as claimed.
+\end{proof}
+
+\noindent {\bf Corollaries of Generalized Lemma}: For all $u \in Z^+$:
+\begin{align}
+g(0,k,u) = & \;1 \\
+g(1,k,u) = & \;\frac{k+u}{k} \quad [= f(k,u)] \\
+g(2,k,u) = & \;\frac{k^3 + 2 k^2 u + ku^2 + u(u\!-\!1)/2}{k^3}
+\end{align}
+\begin{proof}
+$\frac{k^3 + 2 k^2 u + ku^2 + u(u\!-\!1)/2}{k^3}$ satisfies the same base case and recurrence as $g(2,k,u)$.
+The base case (eqn ??) can be verified by inspection. The recurrence (eqn ??) can be verified as follows:
+\begin{align}
+   & g(2,k,u) + \left(\frac{1-\alpha^2}{\alpha^2}\right) \cdot g(1,k,u) \\
+ = & g(2,k,u) + \frac{1}{\alpha^2} \cdot \frac{k+u}{k} - \frac{k+u}{k} \\
+ = & g(2,k,u) + \frac{(k+1)^2}{k^2} \cdot \frac{k+u}{k} - \frac{k+u}{k} \\
+ = & g(2,k,u) + \frac{2k^2+k+2uk+u}{k^3} \\
+ = & \frac{k^3 + 2k^2u +2k^2 + ku^2 + 2uk + k + \frac{1}{2} u^2 + \frac{1}{2} u}{k^3} \\
+ = & \frac{k^3 + 2k^2(u+1) + k(u+1)^2 + (u+1)u/2}{k^3} \\
+ = & g(2,k,u+1).
+\end{align}
+\end{proof}
+
+\subsubsection{Expected Value of Estimate}
+
+In this subsection it is proved that the new
+(algorithm+estimator) combination is unbiased. That is, if Algorithm 1
+is run with parameters $w=k$ and $\alpha = k/(k+1)$ on a stream
+containing $n$ unique values, and if the estimator
+$X=\frac{b}{\alpha^i}$ is used, then $E(X)=n$.
+
+\noindent {\bf Theorem:} 
+\begin{equation}
+E(X | \alpha, w, u) = n.
+\end{equation}
+\begin{proof}
+\begin{align}
+ & E(X | \alpha, w, u)  \\
+= & \sum_{i=0}^u \sum_{b=0}^{w+i}
+\frac{b}{\alpha^i} \cdot \mathrm{Pr}(B \!=\! b | \alpha, w, i) \cdot
+\mathrm{Pr}(I \!=\! i | \alpha, u) \\
+= &\sum_{i=0}^u \frac{1}{\alpha^i} \mathrm{Pr}(I \!=\! i | \alpha, u) \cdot 
+\sum_{b=0}^{w+i} b \cdot \mathrm{Pr}(B \!=\! b | \alpha, w, i) \\
+= & k \cdot \sum_{i=0}^u \frac{1}{\alpha^i} \mathrm{Pr}(I \!=\! i | \alpha, u) \quad \mathrm{By\;Theorem\;?} \\
+= & k \cdot \frac{k+u}{k} \quad \mathrm{By\;Lemma\;?} \\
+= & k + u = n.
+\end{align}
+\end{proof}
+
+\subsubsection{Variance of Estimate}
+
+% This proof follows the same pattern as the proof of expected value, but is
+% broken down into more lemmas as a matter of formatting.
+
+[To improve formatting, conditioning on $\alpha$ will be implied, and $\mathrm{Pr}(Z=z|\ldots)$ 
+will be abbreviated as $\mathrm{Pr}(z|\ldots)$].
+
+% (1.000 w^2 u^1) + (1.000 w^1 u^2) + (0.500 w^0 u^2) + (-0.500 w^0 u^1)
+\noindent {\bf Theorem:}  
+\begin{equation}
+\sigma^2 (X) = \frac{k^2u + ku^2 + u(u\!-\!1)/2}{k^2}.
+\end{equation}
+\begin{proof} $\sigma^2 (X) = E(X^2) - E^2(x)$. From eqn ?? we get $E^2(x) = n^2 = (k+u)^2$. The next lemma
+provides the value of $E(X^2)$. The result follows by algebra.
+\end{proof}
+
+% \noindent {\bf Old Lemma:} $E(X^2) = (\frac{\alpha}{1-\alpha^2} + k^2) \cdot g(2,k,u) - \frac{\alpha}{1-\alpha^2}$
+
+\noindent {\bf Lemma:}  
+\begin{equation}
+E(X^2) = \frac{k^2u + ku^2 + u(u\!-\!1)/2 + k^4 + 2k^3u + k^2u^2}{k^2}.
+\end{equation}
+\begin{proof}
+\begin{align}
+ & E(X^2 | w, u) \\
+= & \sum_{i=0}^u \sum_{b=0}^{w+i} \left( \frac{b}{\alpha^i} \right)^2 \mathrm{Pr}(b|w,i) \; \mathrm{Pr}(i|u) \\
+= & \sum_{i=0}^u \frac{1}{\alpha^{2i}} 
+\mathrm{Pr}(i|u)
+\sum_{b=0}^{w+i} b^2 
+\mathrm{Pr}(b|w,i) \\
+= & \sum_{i=0}^u \frac{1}{\alpha^{2i}} 
+\mathrm{Pr}(i|u)
+\left(  \frac{\alpha-\alpha^{2i+1}}{1-\alpha^2} + k^2  \right) \\
+= & \frac{1}{1-\alpha^2} 
+\left[
+\alpha \sum_{i=0}^u \frac{1}{\alpha^{2i}} \mathrm{Pr}(i|u) -
+\sum_{i=0}^u \alpha \mathrm{Pr}(i|u)
+\right] \\
+ & \quad \quad + k^2 \sum_{i=0}^u \frac{1}{\alpha^{2i}} \mathrm{Pr}(i|u) \\
+= & \frac{1}{1-\alpha^2} 
+\left[ \alpha \cdot g(2,k,u) - \alpha \cdot 1 \right] + k^2 g(2,k,u) \\
+= & (\frac{\alpha}{1-\alpha^2} + k^2) \cdot g(2,k,u) - \frac{\alpha}{1-\alpha^2} \\
+= & \frac{k(2k^2+2k+1)}{2k+1}
+\cdot g(2,k,u) - 
+\frac{k(k+1)}{2k+1} \\
+= & \frac{
+\left(\begin{array}{c}
+2k^5 + 4k^4u + 2k^3u^2 + 3k^2u^2 + k^4 + 4k^3u \\
+\quad \quad \quad + 2ku^2 + k^2u - ku + u(u-1)/2
+\end{array}\right)
+}{k^2 (2k+1)} \\
+= & \frac{k^2u + ku^2 + u(u\!-\!1)/2 + k^4 + 2k^3u + k^2u^2}{k^2}.
+\end{align}
+\end{proof}
+
+\noindent {\bf Corollary:} Rewrite eqn ?? in terms of $k$ and $n$, then let $n \rightarrow \infty$.
+\begin{align}
+%  \sigma^2 (X) = & \frac{(k+\frac{1}{2})u^2 + (k^2-\frac{1}{2})u}{k^2} \\
+ \sigma^2 (X) = & \frac{(2k+1)n^2 - (2k^2+2k+1)n + (k^2+k)}{2k^2} \\
+       \rightarrow & \frac{(2k+1)n^2}{2k^2} = \frac{n^2}{k-\frac{k}{2k+1}} < \frac{n^2}{k-\frac{1}{2}}.
+%             \approx & \frac{n^2}{k-\frac{1}{2}}\quad \mathrm{for}\;(n \gg k \gg 1)
+\end{align}
+
+
+
+\subsubsection{Conjectured Third Moment}
+
+Based on examples obtained via exact calculations of the full probability distribution of estimates
+for various values of $k$ and $u$, we conjecture that the (centered) third moment of the distribution
+has denominator = $k^5$, and numerator =
+
+\begin{align*}
+- & \frac{1}{1} k^5u^1 + \frac{3}{2} k^4u^2 + \frac{5}{2} k^3u^3  \\
+- & \frac{3}{2} k^4u^1 - \frac{3}{1} k^3u^2 + \frac{5}{2} k^2u^3  \\
++ & \frac{3}{2} k^3u^1 - \frac{5}{1} k^2u^2 + \frac{5}{6} k^1u^3  \\
++ & \frac{5}{2} k^2u^1 - \frac{2}{1} k^1u^2 + \frac{1}{6} k^0u^3  \\
++ & \frac{7}{6} k^1u^1 - \frac{1}{2} k^0u^2  \\
++ & \frac{1}{3} k^0u^1 
+\end{align*}
+
+\begin{verbatim}
+(-1.000000000 k^5 u^1) +
+ (1.500000000 k^4 u^2) + 
+ (2.500000000 k^3 u^3) + 
+                        
+(-1.500000000 k^4 u^1) +
+(-3.000000000 k^3 u^2) +
+ (2.500000000 k^2 u^3) + 
+                        
+ (1.500000000 k^3 u^1) + 
+(-5.000000000 k^2 u^2) +
+ (0.833333333 k^1 u^3) +      /*   5/6   */
+                        
+ (2.500000000 k^2 u^1) + 
+(-2.000000000 k^1 u^2) +
+ (0.166666667 k^0 u^3) +      /*   1/6   */
+                        
+ (1.166666666 k^1 u^1) +      /*   7/6   */
+(-0.500000000 k^0 u^2) +
+ (0.333333335 k^0 u^1)
+\end{verbatim}
+
+\subsection{Three Variant Algorithms}
+
+Actually, there are now three different variants of our alpha algo + estimator scheme.
+All of them basically start out by running the alpha algo as described. However, a new variant
+estimates the cardinality of the stream to be $Z = \frac{k}{\alpha^i}$, where $k$ is the configured
+target size for the sketch, in place of the actual number of items in the sketch. Another new variant
+can be modeled as making two passes. In the first pass, it runs the alpha algo and obtains a threshold
+$\theta = \alpha^i$. In the second pass, it re-processes the stream,\footnote{Actually, the two passes can be
+executed simultaneously. However, there {\em is} a factor of 2 cost in both time and space over the single-pass scheme
+which produces the estimator $X$.} using a second, independent hash function, counting the number of hash values that are less than $\theta$. If that count is
+$c$, then this scheme's estimate is $Y = \frac{c}{\alpha^i}$.  The third variant is the version of the alpha algo that we actually run. 
+It makes one pass over the stream, using a single hash function, producing a set $S$ of samples whose size is $b$. The estimator is then
+$X = \frac{b}{\alpha^i}$.  Now we collect together the expected values and variances of $X$, $Y$, and $Z$, and also KMV. There also some
+inequalities, which are true for big enough $n/k$.
+
+\begin{align}
+E(Z) = & E(Y) = E(X) = E(KMV) = n \\
+\sigma^2(Z) = & \frac{u(u-1)}{2k} = \frac{n^2-2nk+k^2-n+k}{2k} \\
+   < & \frac{n^2}{2k} \\
+\sigma^2(Y) = & \frac{n^2-nk}{k} \\ 
+            < & \frac{n^2}{k} \\
+\sigma^2(X) = & \frac{k^2u + ku^2 + u(u\!-\!1)/2}{k^2} \\
+            = & \frac{(2k+1)n^2 - (2k^2+2k+1)n + (k^2+k)}{2k^2} \\
+            < & \frac{n^2}{k-\frac{1}{2}} \\
+\sigma^2(KMV) & = \frac{n^2 - kn + n}{k-2} < \frac{n^2}{k-2}
+\end{align}
+
+\subsection{Analysis of the Estimator Z}
+
+\begin{align}
+ E(Z|k,u)  = & \sum_{i=0}^{u}\frac{k}{\alpha^i} \cdot \mathrm{Pr}(i|u) \\
+  = & k \cdot g(1,k,u) = k\cdot\frac{k+u}{k} = n \\
+ E(Z^2|k,u) = & \sum_{i=0}^{u}\frac{k^2}{\alpha^{2i}} \cdot \mathrm{Pr}(i|u) \\
+  = & k^2 \cdot g(2,k,u) \\
+  = & \frac{k^3 + 2k^2u + ku^2 + u(u-1)/2}{k} \\
+  = & \frac{u(u-1)/2}{k} + n^2 \\
+ \sigma^2(Z|k,u) = & E(Z^2|k,u) - n^2 = \frac{u(u-1)}{2k}.
+\end{align}
+
+\subsection{Analysis of the Estimator Y}
+
+\begin{align}
+ & E(Y|k,u)  \\
+= &    \sum_{i=0}^u    \sum_{c=0}^{n}    \frac{c}{\alpha^i}   \cdot \mathrm{Pr}(c|n,i)   \cdot \mathrm{Pr}(i|u) \\
+= &    \sum_{i=0}^u  \frac{1}{\alpha^i}  \mathrm{Pr}(i|u)  \cdot \sum_{c=0}^{n} c \; \mathrm{BinomialPMF}(c|n,\alpha^i) \\     % \mathrm{Pr}(c|n,i)  
+= &    \sum_{i=0}^u  \frac{1}{\alpha^i}  \mathrm{Pr}(i|u)  \cdot n \; \alpha^i \\
+= & n \cdot \sum_{i=0}^u \mathrm{Pr}(i|u) = n.
+\end{align}
+
+\begin{align}
+  & E(Y^2|k,u)  \\
+= &    \sum_{i=0}^u    \sum_{c=0}^{n}    \frac{c^2}{\alpha^{2i}}   \cdot \mathrm{Pr}(c|n,i)   \cdot \mathrm{Pr}(i|u) \\
+= &    \sum_{i=0}^u  \frac{1}{\alpha^{2i}}  \mathrm{Pr}(i|u)  \cdot \sum_{c=0}^{n} c^2 \; \mathrm{BinomialPMF}(c|n,\alpha^i) \\     % \mathrm{Pr}(c|n,i)  
+= &    \sum_{i=0}^u  \frac{1}{\alpha^{2i}}  \mathrm{Pr}(i|u)  \left[ n \alpha^i - n \alpha^{2i} + n^2 \alpha^{2i} \right] \\
+= &  n \sum_{i=0}^u  \frac{1}{\alpha^{i}} \mathrm{Pr}(i|u) - n \sum_{i=0}^u \mathrm{Pr}(i|u) + n^2 \sum_{i=0}^u \mathrm{Pr}(i|u) \\
+= & n \cdot g(1,k,u) - n + n^2 = \frac{n^2}{k} - n + n^2.
+\end{align}
+
+\noindent line ?? is because $E(c^2) = \sigma^2(c) + E^2(c) = np(1-p) + (np)^2$.
+
+\begin{align}
+ \sigma^2(Y|k,u) = & E(Y^2|k,u) - n^2 = \frac{n^2}{k} - n.
+\end{align}
+
+Interestingly, this is the same variance as the fixed threshold algorithm run with $\theta = \frac{k}{n}$.
+However, the two distributions are {\em not} actually the same, despite having the same mean and variance.
+
+\subsubsection{Old Conjecture Section}
+
+For any specific combination of $n$ and $k$, the above analysis allows
+us to calculate the full probability distribution over all estimates
+which could possibly be produced by Algorithm ??. Given the full probability
+distribution, one can compute summary statistics such as the mean
+and variance. When this calculation is done using infinite precision rational
+arithmetic, one finds that even though the intermediate probabilities require
+a huge number of digits to express, massive cancellations occur during the calculation
+of the mean and variance, resulting in an answer that is an integer or a fraction whose
+numerator and denominator contain just a few digits. We have found this to be true
+for thousands of $(k,n)$ pairs. A few examples are contained in the following table:
+
+\begin{center}
+{\footnotesize
+\begin{tabular}{|c|c|c|c|c|}
+\hline 
+$k$ & $u$ & $n$ & $E(X)$ & $\sigma^2(X)$ \\
+\hline 
+ 1 & 2 & 3 & 3 & $7 \; / \; 1$ \\
+ 2 & 3 & 5 & 5 & $33 \; / \; 4$ \\
+ 3 & 5 & 8 & 8 & $130 \; / \; 9$ \\
+ 4 & 7 & 11 & 11 & $329 \; / \; 16$ \\
+ 5 & 13 & 18 & 18 & $1248 \; / \; 25$ \\
+ 6 & 23 & 29 & 29 & $4255 \; / \; 36$ \\
+ 7 & 31 & 38 & 38 & $8711 \; / \; 49$ \\
+ 8 & 43 & 51 & 51 & $18447 \; / \; 64$ \\
+ 9 & 47 & 56 & 56 & $24769 \; / \; 81$ \\
+ 10 & 59 & 69 & 69 & $42421 \; / \; 100$ \\
+\hline                                                          
+\end{tabular}}
+\end{center}
+
+% u_showit ();; (1.000 w^2 u^1) + (1.000 w^1 u^2) + (0.500 w^0 u^2) + (-0.500 w^0 u^1)
+% u_showit ();; (1.000 k^2 u^1) + (1.000 k^1 u^2) + (0.500 k^0 u^2) + (-0.500 k^0 u^1)
+% (-1.000 k^2 n^1) + (1.000 k^1 n^2) + (0.500 k^2 n^0) + (-1.000 k^1 n^1) + (0.500 k^0 n^2) + (0.500 k^1 n^0) + (-0.500 k^0 n^1)
+
+\subsubsection{Ordering Issue}
+
+There is one respect in which this algorithm (and perhaps related algorithms like Gibbons) is theoretially
+weaker than KMV, Giroire, and HLL. Those latter algorithms are completely indifferent to the order in which the hash
+values are processed. They would produce the same results even if the input stream was collected, hashed,
+and sorted before being processed by the sketching algorithm.
+
+On the other hand, the analysis of this paper's algorithm is based on the assumption that the hash values
+are being processed in random order. If the hash values were processed in a non-random order, then $E(|S|)$, 
+$\sigma^2(|S|)$, and $\sigma^2(|X|)$ could all be different from the values calculated above. However,
+we conjecture that $E(X) = n$ would still hold.
+
+Fortunately, this theoretical issue has no practical consequences in a true streaming context where each
+identifier is hashed and processed as soon as it arrives. That is because the hash function 
+converts the arbitrarily ordered stream of identifiers into a randomly ordered stream of hash values.
+
+\subsection{Comparison with Ideal Fixed Threshold}
+
+Just for comparison purposes, we now analyze a procedure (IFT) that one couldn't actually run because it requires
+an oracle. The user specifies a target size $k$ for the sketch. The oracle foresees what $n$ 
+will be, and supplies the fixed threshold $\theta = k / n$. Rather than fully exploiting the oracle's
+omniscience by returning the estimate $k / \theta$, the algorithm processes the stream collecting into a set $S$
+all hash values less than $\theta$, and finally outputs the estimate $|S|/\theta$.
+
+The size of $S$ produced by IFT is governed by a 
+Binomial Distribution whose mean is $k$ and whose variance is
+$\frac{nk-k^2}{n}$.  For large $n$ this approaches a Poisson
+Distribution whose mean is $k$ and whose variance is $k$.
+That is bigger than the $\frac{k}{2} + \frac{1}{4}$ variance of this paper's method.
+
+The estimates produced by IFT are governed by a ``stretched'' version of the same Binomial distribution, whose mean is $n$ 
+and whose variance is $\frac{n^2-nk}{k}$.  For large $n$ this approaches a ``stretched'' Poisson
+distribution whose mean is $n$ and whose variance is $\frac{n^2}{k}$. 
+That is smaller than the $\frac{n^2}{k-\frac{1}{2}}$ variance of this paper's method.
+
+% Compared to this idealized scheme, our new scheme has the same expected values for the sketch size and the estimate,
+% and a smaller variance for the sketch size, and a larger variance for the estimate.
+
+Also, the new scheme's full distribution of estimates is more skewed than that of the idealized scheme.
+See the plot.
+
+\subsection{Comparison with KMV}
+
+We will now compare with the KMV algorithm, which is analyzed in
+several papers, including Giroire.  A KMV sketch always has size
+exactly $k$. Giroire proves that the expected value of the estimate is
+$n$, and that for large $n$ the variance of the estimate is
+approximately $n^2/(k-2)$.
+
+Compared to KMV, our new scheme has the same expected values for the sketch size and the estimate,
+and a larger variance for the sketch size, and a smaller variance for the estimate.
+Also, the new scheme's full distribution of estimates is less skewed than that of KMV.
+See the plot.
+
+% For specific values of $k$ and $n$ one can compare the above exact numerical results with the corresponding values
+% for KMV, and see that the distribution of estimates produced by the new algorithm has the same expected value
+% but lower variance, even when KMV is given 1 extra sample. 
+
+% In addition, the distribution produced by the new algorithm
+% is less ``skewed'' in the sense that the upper tail is lower and the mode and median are not as far below the mean.
+
+% \subsection{Update Cost of Algorithm Implemented Using Lazy Deletion}
+
+\subsection{Cost of Executing the Algorithm}
+
+We will now analyze the execution cost of Algorithm 1, assuming that the
+set S is implemented using a hash table of size $c_h \cdot k$, and
+assuming that this hash table supports $O(1)$-cost lookup and insert operations.
+% \footnote{The actual constant factor in this $O(1)$ depends on the
+% specific type of hash table, and also on the headroom factor $c_h$.}
+% \footnote{The hash table doesn't need to support $O(1)$
+% deletions of specific items; we can't get our hands on those items
+% anyway without the priority queue.} 
+
+Suppose that the stream contains $D$ duplicate hashes in addition
+to the $n$ unique hashes that we have been assuming so far. The cost of processing
+these is $O(D)$; this cost is incurred in lines 1-9.
+
+Now, let us consider the $n=w+u$ unique
+hashes in the stream.  These incur a cost of $O(n)$ in lines 1-9. 
+In addition, $t$ of the $u$ unique hashes processed by the main loop
+make it past line 9 and cause the sketch to be updated in lines 10-12. We will not
+formally analyze the number of updates $t$, focusing instead on the cost of
+performing each update.\footnote{Informally, $E(t)$ is roughly 
+$k \ln (\frac{u+k}{k})$ for large $k$ (assuming that $\alpha = \frac{k}{k+1}$).
+This is similar to the number of updates performed by the heap-based KMV algorithm.}
+% [cite Beyer] could have tightened their bound on the cost of the heap-based algorithm
+% by including the division by $k$ inside the logarithm.}
+
+Clearly, each update incurs an $O(1)$ cost in lines 10 and 11. 
+However, line 12 is a problem. We want to delete from $S$ those
+hashes that are not less than the newly reduced $\theta$. Even if the
+hash table had an $O(1)$-cost deletion operation, we could not easily 
+use it; without the priority queue we do not know of an inexpensive way 
+to immediately locate the specific items that need to be deleted.
+
+Our solution to this problem is to leave the ``deleted'' items in the hash table for a while.
+They are eventually removed during occasional rebuilds of the hash table. Each rebuild costs $O(k)$,
+so we need to make sure that the table isn't rebuilt more often than once per $O(k)$ inserts.
+Having ensured that, the lazy version of line 12 has an amortized cost of $O(1)$, and we are done.
+
+\subsubsection{Further Discussion of the Lazy Algorithm}
+
+Pseudocode for the lazy version of our algorithm is shown in figure 2. Instead of maintaining the 
+set S exactly, this version maintains a set $T \supseteq S$ which not only contains $S$ but also
+some other hashes that are bigger than $\theta$ but haven't been deleted yet by the next rebuild of the 
+hash table which implements $T$.
+
+Because the algorithm is tracking the larger set $T$ but needs to return the size of $S$ in line 6, 
+some extra work is needed there; one must count the number of elements of $T$ which are less than the current
+value of $\theta$.
+
+Now we will discuss the set size $c_r \cdot k$ which triggers a rebuild of the hash table implementing $T$.
+Recall that $c_b \cdot k$ is a high probability upper bound on the maximum size that $S$ an attain during the 
+execution of the algorithm, and that $c_h \cdot k$ is the number of slots in the actual hash table. The value
+of $c_r$ needs to satisfy $c_b < c_r < c_h$, ideally with a large gap at each inequality.
+
+The gap in the inequality $c_r < c_h$ ensures that the hash table's occupancy never becomes too large,
+thus improving the constant factor in the assumed $O(1)$ cost of hash table operations.
+
+The gap in the inequality $c_b < c_r$ ensures that table rebuilds do not occur too often, thus improving the constant
+factor in the $O(1)$ amortized cost of line 12.
+
+\begin{algorithm}[t]
+\caption{Basic Algorithm with Lazy Deletion$(\mathcal{H},k,c_r)$}
+\label{alg:basic-algo-lazy}
+\begin{algorithmic}[1]{\footnotesize
+\STATE $\alpha = k/(k+1)$.
+\STATE $T \leftarrow\;$ (First $k$ unique hashes in $\mathcal{H}$).
+\STATE $ \theta \leftarrow 1.0 $
+\STATE {\bf Loop:}
+% \STATE \COMMENT{Invariant: $E(|T|) >= \alpha/(1-\alpha)$}.
+% \STATE \COMMENT{Invariant: $T$ contains at least all $h < \theta$ seen so far in $\mathcal{H}$}.
+\STATE \COMMENT{Invariant: $T \supseteq S$}.
+% \STATE \COMMENT{Invariant: $|S| \le |T| < c_r \cdot k$}.
+\STATE {\bf if} no more hashes in $\mathcal{H}$, {\bf return} $(\theta,|\{(h < \theta) \in T\}|)$.
+% \STATE Answer pending queries using $(\theta, |\{(h < \theta) \in T\}|)$.
+\STATE $h \leftarrow\;$ next hash in $\mathcal{H}$.
+\STATE {\bf if} $h \ge \theta$ {\bf goto Loop}.
+\STATE {\bf if} $h \in T$ {\bf goto Loop}.
+\STATE $T \leftarrow T \cup \{h\}$.
+\STATE $\theta \leftarrow \alpha \cdot \theta$.
+\STATE {\bf if} $|T| >= c_r \cdot k$ {\bf then} $T \leftarrow \{(h < \theta) \in T\}$.
+\STATE {\bf goto Loop.}
+}\end{algorithmic}
+\end{algorithm}
+
+\section{Implementation}
+
+Now that we have Algorithm 2, the main thing to decide is the specific kind of hash table
+to use in the actual implementation. The following factors influenced our decision.
+
+\begin{tighterenumerate}
+
+\item Because the items to be stored are themselves hash values, a simple array of hash values accessed via open addressing is
+more space efficient than a library hash table that stores items, keys, and perhaps hashed keys.
+\item Because we employ high quality hash functions (City Hash and Murmur Hash)
+that have good randomness in not only the high but also the low
+bits of the hash values, we can safely use open addressing with a power-of-two hash table size, thus 
+allowing us to probe the table using masked-off low bits of the hash values.
+\item Because our algorithm is already handling deletions lazily via occasional table rebuilds,
+the hash table does not need to support the efficient deletion of specific items. Hence we are
+free to use a double hashing version of open addressing which gracefully handles high load factors
+that permit the rebuilds to be done less often.
+\end{tighterenumerate}
+
+\subsection{Optimizations}
+
+There is some redundant work in Algorithm 2 which can be avoided by
+using a single sequence of probes to achieve the combined effect of
+the lookup operation in line 9, and the possible insert in line 10.
+
+As a further optimization, one can cause rebuilds to happen less often
+by modifying the implementation of the insert operation so that
+whenever possible it overwrites an ``expired'' item (that is, an $h$ that is
+not less than the current threshold) instead of filling up a previously empty
+slot. 
+
+Pseudocode which reflects both of these optimizations appears as
+Algorithm 3. There are some tricky details involved in the implementation
+of the procedure OptimizedLookup().\footnote{Similar issues are thoroughly discussed in
+d in Section ?? of ??.}
+In particular, because we are using double hashing, and because the overwriting insert
+operation treats expired hashes as if they were already deleted, the necessary
+sequence of probes for the lookup and for the insert are not quite the same. This is
+because the expired hashes are stepping stones
+which preserve the connectivity of the chains of probes leading to other hashes in the table.
+
+Let $h$ be the second argument to OptimizedLookup (). Then the lookup operation's sequence of probes cannot stop until
+it finds $h$ or reaches a slot that is actually empty. However, the insert operation's sequence of probes
+can stop upon reaching either an empty slot or a slot containing an expired hash.
+
+Our method of obeying both of these rules with a single sequence of probes is to keep going
+until reaching $h$ or an empty slot. However, during this sequence of probes, if the procedure
+notices any slot containing an expired hash, it remembers the first such slot. At the end
+of the sequence of probes, OptimizedLookup() returns (true,null) if it found $h$, or 
+(false,locationOfFirstExpiredHash) if it noticed any expired hashes, else 
+(false,locationOfEmptySlot).
+
+One final detail is that we are calling OptimizedLookup() with the
+third argument $\alpha \cdot \theta$, so it considers any $h \ge
+\alpha \cdot \theta$ to be expired. This is anticipating the reduction in 
+$\theta$ that will occur in line 13 on the code path which is executed in the
+event that $h$ is not found in the table, and is therefore inserted, and therefore needs
+a slot to be inserted into.
+This code is correct even in the strange-seeming case where an $h$ satisfying
+$\alpha \cdot \theta \le h < \theta$ is inserted into the table, possibly overwriting another 
+$\alpha \cdot \theta \le h'$.
+
+
+\begin{algorithm}[t]
+\caption{Optimized Algorithm With Lazy Deletion $(\mathcal{H},k,c_r)$}
+\label{alg:optimized-algo}
+\begin{algorithmic}[1]{\footnotesize
+\STATE $\alpha = k/(k+1)$.
+\STATE $T \leftarrow\;$ (First $k$ unique hashes in $\mathcal{H}$).
+\STATE $ \theta \leftarrow 1.0 $
+\STATE {\bf Loop:}
+\STATE \COMMENT{Invariant: $T \supseteq S$}.
+\STATE {\bf if} no more hashes in $\mathcal{H}$, {\bf return} $(\theta,|\{(h < \theta) \in T\}|)$.
+\STATE $h \leftarrow\;$ next hash in $\mathcal{H}$.
+\STATE {\bf if} $h \ge \theta$ {\bf goto Loop}.
+% \STATE $(foundIt,InsertHere) \leftarrow \mathrm{fancyCheckTable}(T,h,\alpha \cdot \theta)$.
+\STATE $(foundIt,InsertHere) \leftarrow \mathrm{OptimizedLookup}(T,h,\alpha \cdot \theta)$.
+\STATE {\bf if} $foundit$ {\bf goto Loop}.
+% \STATE $T \leftarrow T \cup \{h\}$.
+\STATE {\bf if} $\mathrm{Empty}(TableSlot[InsertHere])\;\mathbf{then}\; |T| \leftarrow |T|\!+\!1$.
+\STATE $TableSlot[InsertHere] \leftarrow h$.
+\STATE $\theta \leftarrow \alpha \cdot \theta$.
+\STATE {\bf if} $|T| >= c_r \cdot k$ {\bf then} $T \leftarrow \{(h < \theta) \in T\}$.
+\STATE {\bf goto Loop.}
+}\end{algorithmic}
+\end{algorithm}
+
+
+\end{document}
+
+
+\section{old crap}
+
+
+\begin{algorithm}[t]
+\caption{Incremental Greedy ($T$)}
+\label{alg:incr-greedy}
+\begin{algorithmic}[1]
+{\footnotesize
+\STATE InitializeIncrementalGreedy($T$).
+\WHILE {notEmpty($Q$)}
+\STATE \label{code:ig-getmax} $B \leftarrow$ extractMax($Q$).
+\STATE $X \leftarrow$ nearestChosenAncestor($B$); could be $\perp$.
+\STATE BgX $\leftarrow A[B]$. \quad \COMMENT{ ``B given X''}
+\STATE BgB $\leftarrow H[B]$. \quad \COMMENT{ ``B given B''}
+\STATE \COMMENT {Update ancestors of $B$}.
+\FORALL {$w \in$ ancestors($B$)}
+\STATE \label{code:ig-actual-above} $A[w] \leftarrow A[w] + (BgB - BgX)$.
+% \IF {not $C[w]$}
+\IF {not $w \in S$}
+\IF {depth($w$) < depth($X$)}
+\STATE $H[w] \leftarrow H[w] + (BgB - BgX)$.
+\ELSE
+\STATE \label{code:ig-hypo-above} BgW $\leftarrow$ rcst($B,w$,false). \quad \COMMENT{ ``B given W''}
+\STATE $H[w] \leftarrow H[w] + (BgB - BgW)$.
+\ENDIF
+\STATE \label{code:modkey-above} modifyKey($Q,w,(A[w]-H[w])$).
+\ENDIF
+\ENDFOR
+\STATE \COMMENT {Update nodes in $T_B$.}
+\STATE $S \leftarrow S \cup \{B\}$.
+% \STATE $A[B] \leftarrow BgB$.
+\STATE \label{code:ig-actual-below} rcst ($B$,$B$,true). \quad \COMMENT {updates $A[v], \forall v \in T_B$}.
+\FORALL {$v \in T_B$}
+\IF {not $v \in S$}
+\STATE \label{code:modkey-below} modifyKey($Q,v,(A[v]-H[v])$).
+\ENDIF
+\ENDFOR
+\ENDWHILE
+}
+\end{algorithmic}
+\end{algorithm}
+
+
+\begin{algorithm}[t]
+\begin{algorithmic}[1]
+{\footnotesize
+\STATE {\bf Procedure} rcst($v,a,z$). \quad \COMMENT{$v$ is a tree node. $a$ is an assumed nca; could be $\perp$.
+boolean $z$ tells whether to save computed subtotals in $A[]$.}
+% \IF {$C[v]$}
+\IF {$v \in S$}
+\STATE subtotal $\leftarrow$ 0.0 + $\sum_{w \in children(v)} rcst(w,v,z)$
+\ELSE
+\STATE subtotal $\leftarrow$ $re(v,a)$ + $\sum_{w \in children(v)} rcst(w,a,z)$
+\ENDIF
+\STATE {\bf if} {$z$} {\bf then} $A[v]$ $\leftarrow$ subtotal {\bf end if}
+% \IF {$z$}
+% \STATE $A[v]$ $\leftarrow$ subtotal
+% \ENDIF
+\RETURN subtotal
+}
+\end{algorithmic}
+\caption{Recursively Compute Subtree Totals}
+\label{alg:rcst}
+\end{algorithm}
+
+
+
+
+
+
+
+
+
+\subsubsection{Exact Size Distributions}
+
+We will numerically compute the exact size distributions for one or
+more of the following three scenarios: 1) finite time, no warmup;
+2)finite time, standard warmup; 3) infinite time (warmup doesn't matter).
+
+\noindent {\bf Finite time, no warmup:} In other words, we start out with
+an empty set $S$ and jump directly into the main computation. Let $T$ be the finite
+amount of time, as measured in clock ticks, which are the same thing as inserts.
+Clearly:
+\[
+E(|S|) = \sum_{i=1}^{T} \alpha^i = \mathrm{blah}
+\]
+
+However, we want to compute the entire probability distribution, which
+is somewhat like a binomial distribution, except that each coin has a
+different probability.  This general class of distributions is called
+``Poisson Binomial'', and is known to be computable using dynamic
+programming. See e.g. ??.
+
+Continuing with our setup in which $\alpha^{i+1}$ is the probability of an
+item still being in the cache if $i$ more items have been inserted
+since it was inserted, let $\mathrm{PB}(b,t)$ denote the probability
+that the cache contains $b$ items after a total of $t$ insertions have
+occurred.  Then $\mathrm{PB}(b,t)$ is defined by the following
+recurrence and base cases:
+
+\begin{align}
+  \mathrm{PB}(b=0,t=0) = & 1 \\
+  \mathrm{PB}(b>0,t=0) = & 0 \\
+  \mathrm{PB}(b=0,t>0) = & (1-\alpha^t) \cdot \mathrm{PB}(b,t\!-\!1) \\
+  \mathrm{PB}(b>0,t>0) = & (1-\alpha^t) \cdot \mathrm{PB}(b,t\!-\!1) \; + \\
+                         & \quad \quad \; \; \alpha^t  \cdot \mathrm{PB}(b\!-\!1,t\!-\!1)
+\end{align}
+
+\subsubsection{Number of Insertion Operations}
+
+Theorem: in the ($k \rightarrow \infty$) limit, the expected number of 
+times that a hash value $h$ is added to $S$ in line ?? of algo ?? is approximately
+$k \ln (U/k)$.
+
+We note that dynamic programming can be used to numerically calculate
+the exact probability distribution for the number of
+insertion operations executed by this algorithm on a length $k+U$
+stream of unique hash values. Let NI be a two-dimensional table
+whose entry NI$(i,u)$ contains the probability that $i$ insertion
+operations have occured given that $u$ (post-warmup) stream items have been
+processed so far. This table can be be built in $O(U^2)$ time
+using the following recurrence and base cases:
+
+\begin{align}
+  \mathrm{NI}(i=0,u=0) = & 1 \\
+  \mathrm{NI}(i>0,u=0) = & 0 \\
+  \mathrm{NI}(i=0,u>0) = & (1-\alpha^i) \cdot \mathrm{NI}(i,u\!-\!1) \\
+  \mathrm{NI}(i>0,u>0) = & (1-\alpha^i) \cdot \mathrm{NI}(i,u\!-\!1) \; + \\
+                         & \quad \;\;\; \alpha^{i\!-\!1} \cdot \mathrm{NI}(i\!-\!1,u\!-\!1)
+\end{align}
+
+Now we can show some plots showing the nice concentration of this probability
+distribution for some plausible values of $\alpha$ and $U$.
+More interestingly, this distribution is one of the ingredients in the calculation
+of exact error curves.
+
+
+% Calculated using dynamic programming.
+% \item [$\mathrm{CU}(b,w,u)$:] given $w$ and $u$, this is the probability that
+% the final cardinality of $S$ is $b$. Defined in terms of $\mathrm{NI}(i,u)$ and
+% $\mathrm{CT}(b,w,i)$.
+
+% Defined in terms of $\mathrm{NI}(i,u)$ and $\mathrm{CT}(b,w,i)$.
+
+
+
+
+
+\subsubsection{Size of Sketch}
+
+\noindent In this section we characterize the distribution of values 
+of $|S|$ at the top of the loop in Algorithm ??, in the steady state, 
+by which we mean that the algorithm has already been running forever.
+
+The analysis is similar to how a $D/M/\infty$ system would be analyzed
+in queueing theory. There is a clock which ticks once per execution of
+lines ??  through ??. At each tick, a new item is added to S, and
+$\theta$ is reduced, possibly causing some items to be deleted from S.
+Assuming that the newly inserted value is an independent uniform
+random variable\footnote{Actually it is a hash value, but for simplicity
+we are assuming that hash values are uniformly distributed random values.}
+and considering the fact that this newly inserted value will stay in the cache until it is 
+bypassed by the geometrically decreasing $\theta$'s, the new item's
+lifetime in the cache is determined by an independent random variable that is geometrically
+distributed with parameter $\alpha$. 
+
+Now, when the algorithm is at the top of the loop, the size of the cache $S$ 
+is the number of items whose geometrically distributed lifetimes have not yet expired. 
+If $i$ more items have been inserted since a given item was inserted, then its probability
+of still being alive is $\alpha^{i+1}$. Hence the (steady state) expected value
+and variance of $|S|$ are determined by the following two infinite series.\footnote{In
+case it is not obvious why these infinite series start at $i=1$
+instead of $i=0$, the reason is that even the most recent item added in line ??
+has already had one chance to be deleted by the combined effect of lines ?? and ??.}
+
+Theorem (expected value):
+\[
+E(|S|) = \sum_{i=1}^{\infty} \alpha^i = \frac{\alpha}{1-\alpha}
+\]
+
+Theorem (variance):
+\[
+\sigma^2(|S|) = \sum_{i=1}^{\infty} \alpha^i (1-\alpha^i) = \frac{\alpha}{1-\alpha^2}
+\]
+
+\noindent For concreteness, we note that if $\alpha=k/(k+1)$, then $E(|S|) = k$, and 
+$\sigma^2(|S|) = \frac{k^2+k}{2k+1} \approx \frac{k}{2} + \frac{1}{4}$.
+
+
+\subsection{Analysis of Variance of Cache Size}
+
+\subsection{Exact Analysis of Algorithm}
+
+This section contains an exact combinatorial analyis of the new
+algorithm. The output of this analysis is a set of probability
+distributions that are defined by recurrences. These recurrences can
+be evaluated numerically by dynamic programming to obtain the exact
+distributions for specific values of $\alpha$ and $U$, which can
+then be plotted. By contrast, the approximate analysis is Section ??
+applies to all values of $\alpha$ and $U$. 
+
+We will now specify the relevant set of probability distributions. 
+Each of them has an additional parameter $\alpha$ which is not 
+shown because it is fixed for a given run of the algorithm.
+
+The following three distributions have a common setup and variable names;
+$S$ was initialized with $w$ unique hashes, and $t$ additional unique hashes
+have been inserted into $S$ since then.
+
+\begin{tighterdescription}
+\item [$\mathrm{WM}(b,w,t)$:] the probability that $b$
+of the $w$ ``initialization hashes'' are still members of $S$. 
+% Defined in terms of the Binomial distribution.
+\item [$\mathrm{PB}(b,t)$:] the probability that $b$ of the 
+$t$ ``additional hashes'' are still members of $S$. 
+% Calculated using dynamic programming.
+\item [$\mathrm{CT}(b,w,t)$:] the probability that $b$
+of the $(w+t)$ hashes (of both kinds) are still members of $S$. 
+% Defined in terms of $\mathrm{WM}(b,w,t)$ and $\mathrm{PB}(b,t)$.
+\end{tighterdescription}
+
+The following distributions have a common setup that is
+slightly different from the above: $S$ was initialized with $w$ unique hashes, and $u$ additional unique hashes
+have processed, but not necessarily inserted, since then.
+
+\begin{tighterdescription}
+\item [$\mathrm{NI}(i,u)$:] given $u$, this is the probability that $i$ hashes
+were actually inserted into $S$. 
+\item [$\mathrm{IB}((i,b),w,u)$:] given $w$ and $u$, this is the
+probability that ($i$ hashes were inserted into $S$ AND the final size of $S$ is $b$).
+\item [$\mathrm{ES}(x,w,u)$:] given $w$ and $u$, this is the
+probability that $x$ is the sketch's estimate of the number of unique items in the stream.
+\end{tighterdescription}
+
+%  probability that the sketch's stream-size estimate is $b/\alpha^i$
+
+\noindent Now we actually define the distributions.
+\begin{align}
+\mathrm{WM}(b,w,t) & = \mathrm{BinomialPDF}(b,w,\alpha^t). \\
+\mathrm{CT}(b,w,t) & = \sum_{c+d=b} \mathrm{WM}(c,w,t) \cdot \mathrm{PB}(d,t). \\
+\mathrm{IB}((i,b),w,u) & = \mathrm{CT}(b,w,i) \cdot \mathrm{NI}(i,u). \\
+\mathrm{ES}(x,w,u) & = \sum_{(i,b) | x = b / (\alpha^i)} \mathrm{IB}((i,b),w,u). \\
+\end{align}
+
+PB is a special case of a ``Poisson Binomial'' distribution; it can be calculated by dynamic programming
+using these recurrences:\footnote{There is a literature on using DP to calculate
+general Poisson Binomial distributions. See e.g. ??.}
+
+\begin{align}
+  \mathrm{PB}(b=0,t=0) = & 1 \\
+  \mathrm{PB}(b>0,t=0) = & 0 \\
+  \mathrm{PB}(b=0,t>0) = & (1-\alpha^t) \cdot \mathrm{PB}(b,t\!-\!1) \\
+  \mathrm{PB}(b>0,t>0) = & (1-\alpha^t) \cdot \mathrm{PB}(b,t\!-\!1) \; + \\
+                         & \quad \quad \; \; \alpha^t  \cdot \mathrm{PB}(b\!-\!1,t\!-\!1)
+\end{align}
+
+NI can be also be calculated by dynamic programming, using the following recurrences:
+\begin{align}
+  \mathrm{NI}(i=0,u=0) = & 1 \\
+  \mathrm{NI}(i>0,u=0) = & 0 \\
+  \mathrm{NI}(i=0,u>0) = & (1-\alpha^i) \cdot \mathrm{NI}(i,u\!-\!1) \\
+  \mathrm{NI}(i>0,u>0) = & (1-\alpha^i) \cdot \mathrm{NI}(i,u\!-\!1) \; + \\
+                         & \quad \;\;\; \alpha^{i\!-\!1} \cdot \mathrm{NI}(i\!-\!1,u\!-\!1)
+\end{align}
+
+
+
+
+
+\subsection{Conjectured Expected Value and Variance of Estimates}
+
+\noindent {\bf Conjecture:} Suppose that $n$ is the true number of uniques, and that the above algorithm is run with parameters
+$\alpha = \frac{k}{k+1}$, and $w = k$. Let $u = n-k$, and let $X$ be the random variable for the estimate of $n$ produced by the algorithm.
+\begin{align}
+        E(X) = & n \\
+\sigma^2 (X) = & \frac{(2k+1)u^2 + (2k-1)u}{2k^2} \\
+             = & \frac{(2k+1)n^2 - (2k^2+2k+1)n + (k^2+k)}{2k^2} \\
+             \approx & \frac{n^2}{k-\frac{1}{2}}\quad \mathrm{for}\;(n \gg k \gg 1)
+\end{align}
+
+
+
+ 1 &   2 &   3 &    3 & $7\;/\;1$ \\
+ 2 &   6 &   8 &    8 & $111\;/\;4$ \\
+ 3 &   8 & 11 & 11 & $292\;/\;9$ \\
+ 4 &  10 &  14 &   14 & $605\;/\;16$ \\
+% 5 &   8 &  13 &   13 & $548\;/\;25$ \\
+ 5 &   4 &  9 &   9 & $186 \;/\; 25$ \\
+ 6 &  11 &  17 &   17 & $1177\;/\;36$ \\
+ 7 &  13 &  20 &   20 & $1898\;/\;49$ \\
+ 8 &   7 &  15 &   15 & $861\;/\;64$ \\
+ 9 &  23 &  32 &   32 & $6877\;/\;81$ \\
+10 &  14 &  24 &   24 & $3451\;/\;100$ \\
+
+
+
+\subsubsection{older text}
+
+Because the deletions in step ?? in the basic algorithm are difficult
+to implement efficiently, we adopt a lazy deletion strategy that
+maintains a set $T$ that is a superset of $S$.  The analysis of 
+this scheme involves three specific sizes of $T$, namely namely
+the ``bound'' size $k \cdot c_b$; the ``rebuild size'' $k \cdot
+c_r$, and the ``headroom'' size $k \cdot c_h$,
+Assuming that lookup and insert operations on $T$ cost $O(1)$,
+we will show that with high probability, the update cost of the
+algorithm with lazy deletion is $O(1)$.
+
+
+Apparently, $E(X)=n$; the denominator of $\sigma^2(X)$ is $k^2$; 
+and the numerator of $\sigma^2(X)$ is $(k+\frac{1}{2})u^2 + (k^2-\frac{1}{2})u = ku(k+u)+\frac{1}{2}u(u-1)$.
+Because thousands of data points are perfectly explained by these simple functions,\footnote{$ku(k+u)+\frac{1}{2}u(u-1)$ is an integer because
+$u(u-1)$ is even.}
+Occam's razor suggests the following:
+
+
+\begin{algorithm}[t]
+\caption{Basic Algorithm Using a Hash Table $T$}
+\label{alg:main-algo-basic}
+\begin{algorithmic}[1]{\footnotesize
+\STATE $T \leftarrow S \leftarrow\;$ (Output of warmup phase).
+\STATE $ \theta \leftarrow 1.0 $
+\STATE {\bf Loop:}
+\STATE \COMMENT{Invariant: $T \supseteq S$}.
+\STATE $h \leftarrow \mathrm{hash}(next\;item\;in\;stream)$.
+\STATE {\bf if} $h \ge \theta$ {\bf goto Loop}.
+\STATE {\bf if} $\mathrm{inTable}(T,h)$ {\bf goto Loop}.
+\STATE $\mathrm{tableInsert}(T,h)$.
+\STATE $\theta \leftarrow \alpha \cdot \theta$.
+\STATE $\mathrm{lazilyDeleteItemsGE}(T,\theta)$.
+\STATE {\bf goto Loop.}
+}\end{algorithmic}
+\end{algorithm}
+
+
+
+
+
+
+\subsection{Old Text}
+
+
+
+[Oct 29: done for today. Will come back later and replace all of the old text which follows.]
+
+In the previous section, the algorithm was described in terms of sets,
+with no discussion of data structures.  To be fast, an actual implementation
+needs to use a data structure for sets that supports cheap membership testing
+(line ?? of algorithm ??)  insertion of specific items (line ??), and
+deletion of all current items larger than a threshold (line ??).  The
+first two are no problem since we are assuming a computational model
+in which hash tables support constant-time membership testing and
+insertion.
+
+However, since we got rid of the heap employed by the standard KMV
+algorithm, we cannot cheaply get our hands on the largest current
+items so that they could be removed by a constant-time deletion
+operation. Therefore we fall back on a lazy deletion scheme which gets
+rid of these items eventually, with amortized $O(1)$ cost per deleted
+item. We remark that since we aren't actually using a constant-time
+delete operation, we can use an underlying hash table implementation
+(e.g. double hashing) which doesn't support that operation, but which
+has other advantages (e.g. good performance at high load factors).
+
+The pseudocode in Algorithm ?? is a high-level view of an unoptimized
+implementation of our algorithm, with sets represented by hash tables,
+as discussed above. We point out that since we are using lazy deletion,
+the hash table $T$ is a superset of the actual sketch $S$; although it
+is not currently reflected in the code, when answering a query one must
+first scan through the hash table counting the number of items that
+are less than the current value of $\theta$.
+
+
+The pseudocode in Algorithm ?? is a more detailed view of an optimized hash-table-based
+implementation of our algorithm. One detail that was not previously shown is that
+lazy deletion is partly implemented by rebuilding the table each time an occupancy limit
+is reached; the new table only includes items smaller than the current value of $\theta$.
+The other part of the lazy deletion scheme will be discussed shortly.
+
+The first optimization is motivated by the observation that (given our
+underlying hash table implementation, which is open addressing with
+double hashing), the insertion operation repeats some of the work that
+was done during the membership test. Hence these two operations are
+combined into a single procedure called fancyCheckTable.  This returns
+a boolean telling whether the item was found. If the item was not
+found, it also returns the index of an array location where the new
+item could be legally stored, according to the rules of the underyling
+hash table implementation, if it turns out that we actually do want to
+store it.
+
+The second optimization is a refinement on our basic lazy
+deletion scheme, which has the effect of causing table rebuilds to occur
+less frequently. This optimization is closely related to a standard
+technique for deleting items under double hashing, namely inserting a
+fake value which represents ``deleted'', but which is different from
+``empty''.  In our case, any value which is larger than the current
+value of $\theta$ can be treated exactly the same way that a special
+``deleted'' value would be under the above-mentioned scheme. In
+particular, while checking set membership, a ``deleted'' value is
+considered to be nonempty (to avoid breaking existing sequences of re-probes),
+but while inserting a new item, a ``deleted'' value is considered to
+be empty, and can be simply over-written. When it occurs, such an 
+over-write has two advantages. First, the table does not become more
+full, so the next rebuild is postponed. Second, the item is
+closer to to its ``home'' slot than it would be it were inserted
+in the next available empty slot.
+
+To implement this idea, the procedure fancyCheckTable does the
+following: using standard double hashing logic, it examines a sequence
+of table locations, scanning for a location that either contains $h$
+or is empty. Along the way, if it ever sees a location containing a
+``deleted'' item (that is, an item that is not less than the current
+theta), then it remembers the first such location. If it ultimately
+finds $h$, it returns (true,null).  Otherwise, it returns
+(false,insertHere), where insertHere identifies the first slot
+containing a ``deleted'' item, if one was seen; otherwise it
+identifies the empty slot which terminated the search for $h$.
+
+Mainly for discussion purposes, line ?? shows another possible
+optimization that we do not include in our actual implementation. The
+idea is to avoid inserting a new item if it is bigger than the updated
+value of theta, and therefore would be deleted immediately. It is not
+obvious that this hypothetical optimization would actually save time;
+the conditional branch is executed after every decrease of $\theta$,
+but work would only be avoided in the comparatively rare case where $\alpha
+\cdot \theta \le h < \theta$.
+
+% To avoid confusion, we emphasize that whether or not this optimization
+% is included has no effect on the correctness of the implementation.
+% Even more importantly, the seemingly strange possibility that an item
+% might be inserted and then immediately deleted does not mean that the
+% algorithm itself is incorrect. Another seemingly strange thing is that
+% in the unlikely case where the set size has fallen far below the
+% target size, we still continue to decrement $\theta$ after every
+% insertion, despite the fact that intuitively one could climb more
+% quickly back up to the target size by not decrementing theta.  This is
+% a case where one just has to trust the mathematics. Theorems ?? and ??
+% say that the Algorithm ??, as stated, causes the average set size to
+% be blah, with variance blah.
+
+
+
+\begin{algorithm}[t]
+\caption{Optimized Algorithm Using a Hash Table $T$}
+\label{alg:main-algo-optimized}
+\begin{algorithmic}[1]{\footnotesize
+\STATE $T \leftarrow S \leftarrow\;$ (Output of warmup phase).
+\STATE $tableCard \leftarrow |T|$.
+\STATE $ \theta \leftarrow 1.0 $
+\STATE {\bf Loop:}
+\STATE \COMMENT{Invariant: $T \supseteq S$}.
+\STATE $h \leftarrow \mathrm{hash}(next\;item\;in\;stream)$.
+\STATE {\bf if} $h \ge \theta$ {\bf goto Loop}.
+\STATE $(foundIt,InsertHere) \leftarrow \mathrm{fancyCheckTable}(T,h,\alpha \cdot \theta)$.
+\STATE {\bf if} $foundit$ {\bf goto Loop}.
+\STATE $\theta \leftarrow \alpha \cdot \theta$.
+\IF {$h < \theta$}
+\STATE {\bf if} $\mathrm{Empty}(T[InsertHere])\;\;tableCard \leftarrow tableCard\!+\!1$.
+\STATE $T[InsertHere] \leftarrow h$.
+\IF {$tableCard > OccupancyLimit$}
+\STATE $tableCard \leftarrow \mathrm{rebuildTable}(T,\theta)$.
+\ENDIF
+\ENDIF
+\STATE {\bf goto Loop.}
+}\end{algorithmic}
+\end{algorithm}
+
+
+
+
+
+
+These exact calculated values and others, amounting to a total of 5050 different $(k,n)$ pairs,
+constitute a computer-assisted proof of the following two theorems:
+
+\noindent {\bf Theorem:} Either $E(X)$ is not a polynomial in $k$ and $n$, or it is a polynomial in $k$ and $n$ which contains
+a term of degree > 100, or it equals $n$.
+
+\noindent {\bf Theorem:} Either $\sigma^2(X)\cdot k^2$ is not a polynomial in $k$ and $u$,
+or it is a polynomial in $k$ and $u$ which contains a term of degree > 100, or it equals 
+$ku(k+u)+\frac{1}{2}u(u-1)$; this is an integer because $u(u-1)$ is even.
+

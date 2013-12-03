@@ -1,0 +1,461 @@
+\documentclass{sig-alternate}
+\usepackage{times}
+\usepackage{algorithm, algorithmic}
+\usepackage{amsmath, amssymb} % , amsthm}
+\usepackage{graphicx}
+\usepackage{algorithm, algorithmic}
+% \usepackage{outlines}
+\usepackage{color}
+
+\newenvironment{tighterdescription}%
+  {\begin{description}%
+    \setlength{\itemsep}{1pt}%
+    \setlength{\parskip}{1pt}}%
+  {\end{description}}
+
+\newenvironment{tighterenumerate}%
+  {\begin{enumerate}%
+    \setlength{\itemsep}{1pt}%
+    \setlength{\parskip}{1pt}}%
+  {\end{enumerate}}
+
+\newenvironment{tighteritemize}%
+  {\begin{itemize}%
+    \setlength{\itemsep}{1pt}%
+    \setlength{\parskip}{1pt}}%
+  {\end{itemize}}
+
+\begin{document}
+
+% \newtheorem{theorem}[definition]{Theorem}
+
+\title{Some Set Ops Material}
+
+\numberofauthors{1}
+\author{three authors}
+
+\maketitle
+\begin{abstract}
+no abstract yet
+\end{abstract}
+
+
+\section{Estimating Set Expressions \\ using Theta Sketches}
+
+\begin{algorithm}[t]
+\caption{Set Expression Estimation Procedure}
+\label{alg:set-expr-algorithm}
+\begin{algorithmic}[1]{\footnotesize
+\STATE Inputs: (SetExpression $\xi$, $m$ Streams $\{\mathcal{M}_j\}$ of Size $\{n_j\}$, \\
+                $k$, Shared Hash Function $\mathrm{SH}()$, Sketching Algorithm SA()))
+\FORALL {Streams $\mathcal{M}_j$}
+\STATE  $(\theta_j, S_j) \leftarrow \mathrm{SA}(k,SH(),\mathcal{M}_j) \quad$. %  // Compute Theta Sketch.
+\ENDFOR
+\STATE $\theta_r \leftarrow \min (\{\theta_j\})$.
+\STATE $S_r = \{h | (h \in \cup S_j) \wedge (h < \theta_r) \wedge (\xi(h) = \mathrm{true})\}$
+\STATE Output the estimate $Y_r = \frac{|S_r|}{\theta_r}$ and the sketch $(\theta_r, S_r)$.
+}\end{algorithmic}
+\end{algorithm}
+
+The primary driver of the design of our theta-sketch system is the
+problem of producing an estimate $Y_r$ of the number $n_r$ of unique
+identifiers in a stream $\mathcal{M}_r$ that is never materialized,
+but instead is defined by a set expression $\xi()$ over a collection
+$\{\mathcal{M}_j\}$ of streams that {\em are} materialized and hence can be
+directly manipulated by the sketching system.
+
+Our system's procedure for producing this estimate $Y_r$ is extremely simple, as shown by
+the pseudocode in Algorithm ??. We compute the theta sketches, take the minimum, blah, blah, blah.
+
+Empirically, we have found that the system works just fine (no bias,
+reasonably low variance) for several practical choices for SA(),
+including Section ??'s novel algorithm based on Morris-style
+probabilistic counting, and a KMV-style algorithm in which $\theta$ is
+the $k+1$'st minimum value and $S$ is the set of $k$ hash values
+smaller than $\theta$.  More on this later.
+
+It remains an open problem to formally analyze the distribution of $Y_r$ for these
+practical choices of SA(). However, we have been able to approximately analyze the distribution
+of $Y_r$ when SA() is the ``meta algorithm'' whose pseudocode is presented as Algorithm ??.
+This meta algorithm takes as an argument any ``base'' algorithm for producing a theta sketch.
+For example, the base algorithm could be the Morris-style algorithm or the KMV-style algorithm
+mentioned above.  When the meta algorithm processes a stream, it first generates a new ``private''
+fully independent hash function $H_p$, then computes a theta sketch $(\theta, S_p)$
+for the stream by running the base algorithm with the private hash function. It then discards
+the hash function $H_p()$ and the set $S_p$, and computes a different set $S$ by ``rescanning''
+the stream using the globally shared hash function SH(), collecting all hash values less than
+$\theta$. Finally, it returns the theta sketch $(\theta,S)$, which has the theoretically 
+convenient property that the value of $\theta$ is independent of the hash function which
+generated the hash values in $S$.
+
+We will now characterize the expected value and variance of $Y_r$, the estimate of $|\mathcal{M}_r|$
+produced by Algorithm ??, under the assumption that the sketching algorithm SA() called by
+Algorithm ?? is in fact the meta algorithm presented as Algorithm ??.
+
+We will show that $Y_r$ is unbiased pretty much no matter what base algorithm is called by 
+the meta algorithm.
+
+However, the variance of $Y_r$ does depend on details of the base algorithm. Also, the analysis
+is quite complicated, so at a certain point we will resort to approximations and/or numerical
+calculations. However, even though we will not end up with exact results in a nice closed form,
+our analysis shows that this method works very well.
+
+\subsection{Expected Value of $Y_r$}
+
+Preliminaries: WLOG, we assume that $n_1 = \max \{n_i\}$. Also, whenever we write
+$f(x|\mathrm{BA})$ we really mean $f(x|\mathrm{BA}(),k,\{n_i\},n_r)$.
+\begin{align}
+   & E(Y_r|\mathrm{BA}) \\
+ = & \sum_{\theta_r} \mathrm{Pr}(\theta_r|\mathrm{BA}) \sum_b \frac{b}{\theta_r} \mathrm{Bino}(b;n_r,\theta_r) \\
+ = & \sum_{\theta_r} \mathrm{Pr}(\theta_r|\mathrm{BA}) \frac{1}{\theta_r} (n_r \cdot \theta_r) \\
+ = & n_r \cdot 1
+\end{align}
+
+So $Y_r$ is unbiased.
+
+\newpage
+
+\subsection{Variance of $Y_r$}
+
+Preliminaries: WLOG, we assume that $n_1 = \max \{n_i\}$. Also, whenever we write
+$f(x|\mathrm{BA})$ we really mean $f(x|\mathrm{BA}(),k,\{n_i\},n_r)$.
+\begin{align}
+   & \sigma^2(Y_r|\mathrm{BA}) \\
+ = & -n_r^2 + \sum_{\theta_r} \mathrm{Pr}(\theta_r|\mathrm{BA}) \sum_b \frac{b^2}{\theta_r^2} \mathrm{Bino}(b;n_r,\theta_r) \\
+ = & -n_r^2 + \sum_{\theta_r} \mathrm{Pr}(\theta_r|\mathrm{BA}) \frac{1}{\theta_r^2} [n_r\theta_r - n_r\theta_r^2 + n_r^2\theta_r^2] \\
+ = & -n_r + n_r \sum_{\theta_r} \mathrm{Pr}(\theta_r|\mathrm{BA}) \frac{1}{\theta_r} \\
+ = & -n_r + n_r \cdot E(\frac{1}{\theta_r}|\mathrm{BA}) \\
+ = & -n_r + \frac{n_r \cdot n_1}{k} \cdot \left[ \frac{k}{n_1} \cdot E\left( \frac{1}{\min(\{\theta_j\})} | \mathrm{BA} \right) \right] \\
+ = & -n_r + \frac{n_r \cdot n_1}{k} \cdot \left[ 1 + 2 \cdot \mathrm{wcp}(\mathrm{BA},k,\{n_i\}) \right]
+\end{align}
+
+\noindent where the ``winners curse penalty'' wcp() is defined as follows:
+\begin{equation}
+\mathrm{wcp}(\mathrm{BA},k,\{n_i\}) = \frac{1}{2}\left(\frac{k}{n_1} E\left( \frac{1}{\min(\{\theta_j\})} | \mathrm{BA} \right) - 1 \right)
+\end{equation}
+
+\noindent Then the standard error of the estimate $Y_r$ is:
+\begin{align}
+   & \mathrm{S.E.}(Y_r|\mathrm{BA}) \\
+ = & \sqrt{\frac{n_1}{n_r} \; \frac{1}{k} \; (1 + 2 \mathrm{wcp}(\mathrm{BA},k,\{n_i\})) - \frac{1}{n_r}} \\
+ < & \sqrt{\frac{n_1}{n_r} \; \frac{1}{k} \; (1 + 2 \mathrm{wcp}(\mathrm{BA},k,\{n_i\}))} \\
+ < & (1 + \mathrm{wcp}(\mathrm{BA},k,\{n_i\})) \cdot \sqrt{\frac{n_1}{n_r}} \cdot \sqrt{\frac{1}{k}} 
+\end{align}
+
+
+% Now, a few remarks on the ``winner's curse penalty'' function. It is
+% different for every base algorithm, and for several base algorithms
+% that we have considered, it is not easy to analyze; in fact, we have
+% basically pushed the entire difficulty of analyzing the variance of
+% our scheme for set expressions down into this one function. However,
+% it {\em is} easy to either numerically compute or empirically estimate
+% its value for specific base algorithms and specific values for $k$ and $\{n_j\}$. 
+% Extrapolating for the collection of specific values that we have computed
+% and estimated, we believe that:
+% 
+% \begin{enumerate}
+% \item The value of wcp is small (e.g. a few percent) in most practical scenarios.
+% \item The value of wcp is smaller for base algorithms whose estimates are more concentrated.
+% For example, under matching conditions, wcp = 2.5 percent for our novel base algorithm while
+% wcp = 3.5 percent for the KMV base algorithm. [REPLACE WITH ACTUAL VALUES.]
+% \item The value of wcp is bigger for set expressions involving more streams. E.g., using our novel
+% base algorithm in both cases, wcp = 2.5 percent for 2 streams but wcp = 5.0 percent for 8 streams.
+% [REPLACE WITH ACTUAL VALUES.]
+% \end{enumerate}
+
+
+\subsection{Informal Analysis of wcp()}
+
+We will now perform an informal approximate analysis of wcp(). The analysis is 
+approximate because it assumes that certain not-quite-gaussian probability distributions
+are gaussian. Having made that assumption, we will make use of the already 
+existing analysis of the expected value of $m$ iid gaussian random variables $G_j$ each with
+mean $\mu$ and standard deviation $\sigma$, which states that:
+\begin{equation}
+% E(max(\{G_j; 1 \le j \le m\}) = \mu + c_m \sigma
+E(max(\{G_j\}) = \mu + c_m \sigma
+\end{equation}
+
+\noindent where the $c_m$'s are known constants; approximate values for some
+of them are shown in table ??.
+
+In fact, during this approximate analysis, we will be making {\em three} new assumptions, and will also
+be using a property of the ``meta algorithm'' that we haven't used until now.
+
+\begin{itemize}
+\item Assumption 1: All of the input stream cardinalties $n_j$ are equal to $n_1$, the largest input stream
+cardinality. We believe, but have not proved, that this is a worst-case assumption.
+\item Assumption 2: The base algorithm's estimate of each input stream cardinality $n_j$ 
+has the form $\hat{n}_j = k / \theta_j$. This assumption is true for both KMV and MPC.
+\item Assumption 3: The base algorithm's distribution of estimates is assumed to be Gaussian,
+with the same mean and variance as the actual, not-quite-gaussian distribution of estimates.
+\item Property of the Meta Algorithm: the threshold $\theta_j$ for each input stream is computed using a different independent hash function.
+\end{itemize}
+
+Under those assumptions, we will now analyze wcp(BA,$k,n_1,m$).
+
+\begin{align}
+   \mathrm{wcp}(\mathrm{BA},k,n_1,m) 
+= & \frac{k}{2n_1} E\left( \frac{1}{\min(\{\theta_j\})} | \mathrm{BA} \right) - \frac{1}{2} \\
+= & \frac{1}{2n_1} E ( \max ( \{ \hat{n}_j \} ) | \mathrm{BA} ) - \frac{1}{2} \\
+\approx & \frac{1}{2n_1}  (n_1 + c_m \sigma(BA))    - \frac{1}{2}  \\
+= & \frac{c_m \sigma(BA)}{2n_1} \\
+\end{align}
+
+\noindent Now, specializing for BA=MPC and BA=KMV:
+\begin{align}
+\mathrm{wcp}(\mathrm{KMV},k,n_1,m)
+\approx & \frac{c_m \sigma(KMV)}{2n_1} \\
+        < & \frac{c_m \frac{n_1}{\sqrt{k-1}}}{2n_1} \\
+        = & \frac{c_m}{2\sqrt{k\!-\!1}} \\
+\mathrm{wcp}(\mathrm{MPC},k,n_1,m)
+\approx & \frac{c_m \sigma(MPC)}{2n_1} \\
+      < & \frac{c_m \frac{n_1}{\sqrt{2k}}}{2n_1} \\
+      = & \frac{c_m}{2\sqrt{2k}}
+\end{align}
+
+The following table contains some approximate values for $c_m$, wcp(KMV), and
+wcp(MPC).
+
+\begin{center}
+\begin{tabular}{|r|c|c|c|c|}
+\hline
+$k$ & $m$ &  $c_m$ & wcp(KMV) & wcp(MPC) \\
+\hline
+   256 & 2 & 0.564 & 1.767\% & 1.247\% \\
+       & 4 & 1.029 & 3.223\% & 2.275\% \\
+       & 8 & 1.424 & 4.457\% & 3.146\% \\
+\hline
+  4096 & 2 & 0.564 & 0.441\% & 0.312\% \\
+       & 4 & 1.029 & 0.804\% & 0.569\% \\
+       & 8 & 1.424 & 1.112\% & 0.786\% \\
+\hline
+ 65536 & 2 & 0.564 & 0.110\% & 0.078\% \\
+       & 4 & 1.029 & 0.201\% & 0.142\% \\
+       & 8 & 1.424 & 0.278\% & 0.197\% \\
+\hline
+\end{tabular}
+\end{center}
+
+\noindent These approximate values suggest the following general statements.
+
+\begin{enumerate}
+\item wcp is at most a few percent in practical scenarios.
+\item wcp grows with the number of streams involved in the set expression, but only logarithmically in $m$.
+\item wcp is smaller for base algorithms whose estimates are more concentrated (e.g. for MPC as opposed to KMV).
+\end{enumerate}
+
+Finally, we claim that the above approximate values of wpc aren't very far from the true values, despite the fact that
+we used a Gaussian approximation without justifying it. For example, the approximate value for wcp(MPC,k=256) listed above 1.247 percent, 
+while the true value (computed numerically using eqn ?? and the recursion developed in section ??) is 1.245 percent.
+
+\section{Informal Analysis of the I/E \\ Rule for Set Intersection}
+
+Just for the purposes of obtaining a curve that we can compare against
+the one derived in the previous section, we will now informally
+analyze the Include/Exclude rule as applied to the problem of
+estimating the size of the intersection of two sets. We will use $a$
+and $b$ to denote the sizes of the two sets, and will in fact only
+consider the case $a=b$. We will use $u$ and $r$ to denote the sizes
+of the union and intersection of the two sets. Instead of analyzing a
+specific sketching method, we will just say that it is some method
+that is unbiased, whose variance is $n^2/k - n$, and which uses a
+different independent hash function when processing each stream. The
+input to the include/exclude rule will be the independent estimates of
+$a$, $b$, and $u$, obtained by separately processing the first stream,
+the second stream, and the stream defined by their union. Then:
+
+\begin{align}
+  & \sigma^2(\mathrm{est}(r)) \\
+= & \left(\frac{a^2}{k} - a\right) + 
+    \left(\frac{b^2}{k} - b\right) + 
+    \left(\frac{u^2}{k} - u\right) \\
+= & 2 \left(\frac{a^2}{k} - a\right) + 
+      \left(\frac{4a^2-4ar+r^2}{k}\right) - (2a - r) \\
+= & \frac{1}{k} (6a^2-4ar+r^2) - 4a + r
+\end{align}
+
+\begin{align}
+  \mathrm{S.E.}(\mathrm{est}(r)) = & \sqrt{\frac{1}{r^2} \cdot \left(\frac{1}{k} (6a^2-4ar+r^2) - 4a + r\right)} \\
+%                           \approx & \sqrt{\frac{3}{2}} \cdot \frac{u}{r} \cdot \sqrt{\frac{1}{k}}
+%                           \approx & \sqrt{6} \cdot \frac{a}{r} \cdot \sqrt{\frac{1}{k}}
+                            \approx \; & 2.45 \cdot \frac{a}{r} \cdot \sqrt{\frac{1}{k}}
+\end{align}
+
+\noindent where the final approximation applies when $r \ll a$ and $a \gg k$.
+
+This formula can be compared with the theta-sketch formula
+
+\begin{equation}
+\mathrm{S.E.}(Y_r|\mathrm{MPC}) \approx 1.01 \cdot \sqrt{\frac{a}{r}} \cdot \sqrt{\frac{1}{k}} 
+\end{equation}
+
+The biggest difference between them is that the I/E rule
+doesn't have a square root on the inverse Jaccard Ratio. 
+
+\begin{center}
+\includegraphics[width=0.9\linewidth]{theoretical-ie-vs-theta.pdf}
+\end{center}
+
+The impact of
+this difference is shown graphically in Figure ??, which plots
+equation ?? and equation ?? for a hypothetical setup where
+$a=b=100000$, and $r$ varies from 1 to 100000. For I/E, we plotted
+equation ?? with k=4096. For theta-sketches, we plotted equation ?? 
+with k=256 and wcp = 0.01247. We gave I/E a bigger value of $k$
+to reflect the fact that HLL uses fewer bits per sample than the theta-sketch system.
+Because it gets a bigger value of $k$, I/E is actually better when
+the intersection is almost as big as the input sets. However, this advantage
+cannot make up for the worse slope of the I/E curve, which causes its standard
+error to be extremely bad when the intersection is small.
+
+\end{document}
+
+\section{A Novel KMV-style \\ Sketching Algorithm}
+
+We will informally define a KMV-style Sketching Algorithm to be any
+algorithm that summarizes a stream via a threshold $\theta$ and a set
+$S$, of size approximately $k$, which contains all unique hash values
+ever seen that are less than $\theta$. This is a broad class which 
+is a superset of two classes in Cormode's taxonomy, namely algorithms
+based on order statistics (such as KMV itself), and many versions 
+of the ``unique sampling'' idea (including e.g. Gibbons). It does 
+not include HLL and related algorithms. This class is highly suitable
+for our purposes due to the known fact that it supports set expression
+estimation with standard error that grows like $J^{-1/2}$
+(where $J$ is one of several versions of the Jaccard Coefficient)
+instead of the much worse $J^{-1}$ growth that one gets by using the
+Inclusion/Exclusion rule with HLL.  
+
+However, we will now put set expressions aside until section ??, and
+concentrate on the single-sketch performance of the algorithms, and
+especially on their standard error as a function of $k$, which we
+claim is roughly $1/\sqrt{k}$ for both KMV itself and for many algorithms
+based on the ``unique sampling'' idea.
+
+% First let us consider KMV itself. If one lets $\theta$ be the k+1'st minimum
+% value (not the $k$'th as is more usually the case), then the standard error
+% of the estimate $k/m_{k+1}$ is $1/\sqrt{k-1}$.
+
+We will now present a novel KMV-like sketching algorithm that is different
+from KMV and from any published version of unique sampling, whose standard
+error is only $1/\sqrt{2k}$. In fact, if one excludes HLL-like algorithms,
+this is smallest standard error of anhy published algorithm.
+
+Our novel sketching algorithm is based on an approximate counting method 
+that predates most sketching algorithms, namely Morris-style probabilistic counting. 
+It is proved by Morris in ??, and by Flajolet in ??, that using only $\log_2 \log_\alpha n$ bits,
+one can approximately count $n$ (already unique) items with a standard error of only $1/\sqrt{2k}$. 
+
+This is impressive both for the $\log \log$ in the number of bits, 
+and for the $\sqrt{2}$ in the denominator of the standard error. 
+However, until now, this has just been a counting method, not a sketching method.
+Although the designers of HLL may have been partly inspired by the
+$\log \log$ of this counting method, they went off in a different
+direction when designing their sketching method and lost the 
+factor of $\sqrt{2}$ in the denominator of the standard error.
+
+On the other hand, our new sketching algorithm retains the factor of 
+$\sqrt{2}$ because it is a {\em direct} adaptation of Morris's original
+Probabilistic Counting method. There is only one thing (however, a {\em very} big thing)
+preventing this counting method from being a sketching method: it has no way
+of telling which items are duplicates. However, the addition of any de-duping mechanism
+would convert it into a sketching method. The de-duping mechanism that we have devised
+is tightly coupled to the probabilistic counting method, and retains the smallest possible set
+set of hash values which guarantee that nothing is ever counted twice.
+
+Finally, we remark that although our new algorithm has a superficial
+resemblence to the well-known ``halving algorithm'' in that both schemes maintain
+a threshold which is occasionally update, there is a subtle difference in the updating
+rule (and we are not talking about the difference between factor of 1/2 updates versus
+factor of $\alpha$ udpates) which turns out to have a major impact of the
+accuracy of the resulting estimates.
+
+
+
+\end{document}
+
+
+% It is also not
+% hard to come up with handy-wavy approximate analyses (e.g. by making
+% certain gaussian assumptions that might or might not be justified) which
+% suggest certain trends. Based on these specific actual values and
+% handy-wavy arguments for trends, we have concluded that:
+
+
+
+\subsection{Informal Analysis of wcp()}
+
+In the above, the ``winners curse penalty'' wcp() was introduced via an algebraic transformation
+between equation ?? to equation ??. Because this transformation was purely syntactic, it cannot
+be wrong, but it could be devoid of meaning.  However, we believe that wcp()
+actually {\em is} a meaningful quantity. In order to explain the intuition which underlies our
+belief, we will now continue the above analysis using a gaussian approximation that we will
+not actually justify.
+
+Before diving into this non-rigorous analysis, we state its implications for the
+standard error of our setops estimation scheme for an expression involving $m$ streams,
+when the base algorithm called by the meta algorithm is either MPC (Morris-style Probabilistic Counting) or KMV.
+In both cases, the approximation is for large $k$ and large $n_1/k$.
+
+\begin{align}
+\mathrm{S.E.}(Y_r|\mathrm{MPC}) \approx &
+\left(1 + \frac{c_m}{2\sqrt{2}} \cdot \sqrt{\frac{1}{k}}\right) 
+\cdot \sqrt{\frac{n_1}{n_r}} \cdot \sqrt{\frac{1}{k}}  \\
+\mathrm{S.E.}(Y_r|\mathrm{KMV}) \approx &
+\left(1 + \frac{c_m}{2} \cdot \sqrt{\frac{1}{k\!-\!2}}\right) 
+\cdot \sqrt{\frac{n_1}{n_r}} \cdot \sqrt{\frac{1}{k}} 
+\end{align}
+
+
+In the above, the $c_m$'s are known constants which emerge from the
+rigorous analysis of the value of the maximum of $m$ gaussian random variables. The following
+table contains several of those constants:
+
+\begin{center}
+\begin{tabular}{|c|c|}
+\hline
+$m$ & $c_m$ \\
+\hline
+1  & 0.000 \\
+2  & 0.564 \\
+% 3  & 0.846 \\
+4  & 1.029 \\
+% 5  & 1.162 \\
+% 6  & 1.267 \\
+% 7  & 1.352 \\
+8  & 1.423 \\
+% 9  & 1.4850131622092370063 \\
+% 10 & 1.5387527308351728560
+% 1  & 0.00000000000000000000 \\
+% 2  & 0.56418958354775628695 \\
+% 3  & 0.84628437532163443042 \\
+% 4  & 1.0293753730039641321 \\
+% 5  & 1.1629644736405196128 \\
+% 6  & 1.2672063606114712976 \\
+% 7  & 1.3521783756069043992 \\
+% 8  & 1.4236003060452777531 \\
+% 9  & 1.4850131622092370063 \\
+% 10 & 1.5387527308351728560
+\hline
+\end{tabular}
+\end{center}
+
+\approx & \frac{c_m}{2\sqrt{k-2}} \quad \quad \mathrm{for\;BA=KMV}
+
+\hline
+1  & 0.000 & 256 & x & y  \\
+2  & 0.564 & 256 & x & y  \\
+4  & 1.029 & 256 & x & y  \\
+8  & 1.423 & 256 & x & y  \\
+\hline
+1  & 0.000 & 4096 & x & y  \\
+2  & 0.564 & 4096 & x & y  \\
+4  & 1.029 & 4096 & x & y  \\
+8  & 1.423 & 4096 & x & y  \\
+\hline
+1  & 0.000 & 65536 & x & y  \\
+2  & 0.564 & 65536 & x & y  \\
+4  & 1.029 & 65536 & x & y  \\
+8  & 1.423 & 65536 & x & y  \\
+\hline

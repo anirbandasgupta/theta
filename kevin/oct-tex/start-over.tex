@@ -1,0 +1,876 @@
+\documentclass{sig-alternate}
+\usepackage{times}
+\usepackage{algorithm, algorithmic}
+\usepackage{amsmath, amssymb} % , amsthm}
+\usepackage{graphicx}
+\usepackage{algorithm, algorithmic}
+% \usepackage{outlines}
+\usepackage{color}
+
+\newenvironment{tighterdescription}%
+  {\begin{description}%
+    \setlength{\itemsep}{1pt}%
+    \setlength{\parskip}{1pt}}%
+  {\end{description}}
+
+\newenvironment{tighterenumerate}%
+  {\begin{enumerate}%
+    \setlength{\itemsep}{1pt}%
+    \setlength{\parskip}{1pt}}%
+  {\end{enumerate}}
+
+\newenvironment{tighteritemize}%
+  {\begin{itemize}%
+    \setlength{\itemsep}{1pt}%
+    \setlength{\parskip}{1pt}}%
+  {\end{itemize}}
+
+\begin{document}
+
+% \newtheorem{theorem}[definition]{Theorem}
+
+\title{Draft of Theta-Sketch Paper}
+
+\numberofauthors{1}
+\author{three authors}
+
+\maketitle
+\begin{abstract}
+no abstract yet
+\end{abstract}
+
+\section{Story Strategy}
+
+In this version of the story, we don't need to make a big deal out of the simplicity claim.
+Instead we claim that our solution is just plain better
+than the obvious baselines in almost every way. What are those baselines?
+
+\begin{itemize}
+\item Beyer is the only true competitor. They described a KMV-based sketch mart with all of the needed capabilities.
+We beat it in almost every way.  Less memory and CPU when creating base sketches. Lower variance for the base sketch estimator. Lower variance for
+the setops estimator.
+\item HLL is not in the running at all because the estimates for setops would be so bad.
+\item Not sure what to say about Chen Cao Bu.
+\item Although no one ever has spelled it out in these terms, it would be possible after reading Gibbons to come up with a sketch-mart scheme that is similar to ours, but with $\alpha$ = 1/2,
+and with a different rule for when to multiply $\theta$ by $\alpha$. That hypothetical scheme is better than Beyer, but is not as good as our actual scheme.
+\end{itemize}
+
+\section{Big-Data Sketch Mart: Motivation and Requirements}
+
+Lee is working on this section.
+
+\section{Our Solution}
+
+Our sketch-mart solution has several main ingredients.
+
+\begin{enumerate}
+\item A Sketch Data Structure $(\theta, S)$.
+\item A practical Algorithm X, whose inputs are a size target $k$ and a stream $\mathcal{A}$ of size $n$,
+and whose outputs are a sketch $(\theta, S)$ and an estimate $Z$ of $n$. These outputs have the following desirable properties:
+$E(|S|) = k$, $\sigma^2(|S|) < k/2 + 1/4$, $E(Z) = n$, and
+$\sigma^2(Z) < n^2/2k$. Furthermore, the amortized update time of Algorithm X is $O(1)$ with excellent constant factors.
+\item A modified Algorithm Y, whose inputs are a size target $k$ and a stream $\mathcal{A}$ of size $n$,
+and whose output is a sketch $(\theta, S')$ which has the theoretically convenient property that the
+value of $\theta$ is independent of the hash function which produced the elements of $S'$. 
+\item A rule for evaluating an arbitrary set expression over a collection of sketches, whose output is not a fact, but rather a sketch.
+This allows a sub-expression of a larger expression to be evaluated as soon as the data becomes available.
+\item An estimator which is unbiased (that is, whose expected value is $n$)
+for a very wide class of sketches $(\theta, S)$. However, the estimator's variance depends on the algorithm
+that was used to create the sketch:
+\begin{enumerate}
+\item If the sketch was produced by KMV with size target $k$, then the estimator's variance is $\sigma^2 < n^2/(k-2)$.
+\item If it was produced by Algorithm X with size target $k$, then the estimator's variance is $\sigma^2 < n^2/(k-(1/2))$.
+\item If it was produced by Algorithm Y with size target $k$, then the estimator's variance is $\sigma^2 < n^2/k$
+\item If the sketch $(\theta, S)$ was produced by the Set Expression Rule applied to a collection of sketches produced by Algorithm Y, 
+then, conditioning on the sketch's particular value of $\theta$, the estimator's variance is $\sigma^2 = (n/\theta) - n$.
+\end{enumerate}
+\end{enumerate}
+
+\section{New Algorithm}
+
+Because of the larger systems context, we will focus on algorithms which naturally\footnote{Although they obviously can be constructed,
+we will not be discussing hybrids which e.g. subdivide the memory budget between an instance of KMV and an instance of HLL.}
+provide a co-ordinated sample of approximately $k$ hash values that can be used to estimate the cardinality of a set expression evaluated
+over a collection of streams. We will call this family of algorithms the ``KMV family'', even though it includes some algorithms (i.e. Gibbons-style
+sampling algorithms) that are traditionally not lumped together with KMV. We note that this ``KMV family'' does not include HLL and its variants.
+
+One of our main results will be a new sketching algorithm whose estimate of $n$ has variance < $n^2/(2k)$. This is the lowest ever for
+an algorithm belonging to the ``KMV family''. The algorithm is based on a novel counting process that is different those used in the actual
+KMV algorithm, or in KMV variants such as Giroire, or in Gibbons-style sampling algorithms, or in HLL for that matter.
+
+We will call this the ``Basic Algorithm''. PseudoCode is shown in Figure ??. 
+Its arguments are a size target ``k'', a hash function, and a stream of identifiers.
+Purely to reduce notational clutter in the pseudocode and its analysis, we pretend that the
+first step is to apply the hash function to the stream of identifiers, producing a stream of hashes.
+The next three lines are a high level description of the algorithm's initialization phase,
+which processes just enough of the stream to find the first $k$ unique hash values, which are used
+to initialize the ``sample'' set $S$. The remainder of the stream of hashes is then processed by
+the remainder of the program.
+
+\begin{algorithm}[t]
+\caption{Basic Algorithm for Processing a Stream}
+\label{alg:basic-algorithm}
+\begin{algorithmic}[1]{\footnotesize
+\STATE Inputs: (target size $k$, HashFunction(), StreamOfIdentifiers).
+\STATE StreamOfHashValues $ \leftarrow$  HashFunction(StreamOfIdentifiers).
+\STATE prefix $\leftarrow$ shortest prefix of StreamOfHashValues containing \\ 
+       \quad \quad \quad \quad \quad $k$ unique hash values.
+\STATE restOfStreamOfHashValues $\leftarrow$ the corresponding suffix.
+\STATE $S \leftarrow$ the $k$ unique hash values in prefix.
+\STATE $\alpha \leftarrow k/(k+1)$.
+\STATE $i \leftarrow 0$.
+\FORALL{$h$ in restOfStreamOfHashValues}
+% \STATE \COMMENT{Invariant: $S$ is exactly the set of all $h < \alpha^i$ \\ \quad \quad \quad 
+% seen so far in restOfStreamOfHashValues}
+\STATE \COMMENT{Invariant: $E(|S|) = k$}.
+\IF{$h < \alpha^i$ AND $h \not \in S$}
+\STATE $S \leftarrow S \cup \{h\}$.
+\STATE $i \leftarrow i + 1$.
+\STATE $S \leftarrow S \setminus \{(x \ge \alpha^i) \in S\}$.
+\ENDIF
+\ENDFOR
+\STATE Output the estimate $Z = k / \alpha^i$ and the sketch $(\theta = \alpha^i, S)$.
+}\end{algorithmic}
+\end{algorithm}
+
+
+
+\subsection{Overview Of Analysis}
+
+We will be proving a number of theorems about the basic algorithm, and also about a 
+couple of variants (not mentioned yet) of the basic algorithm.
+
+In section ??, we will lay some groundwork in the form of  
+a technical lemma about a function $g()$ which encodes the 
+behavior of several summations involving the probability distribution
+which governs the value of $i$ during the execution of the basic algoritm.
+
+In section ?? we will use this groundwork to analyze the estimate $Z = k / \alpha^i$. We will
+prove that it is unbiased, that its variance is ??, the best ever for
+an algorithm from the ``KMV familty''. In fact, we will prove that all
+of the moments of its distribution are well behaved, resulting in a
+strong bound of the epsilon-delta variety. 
+
+In section ?? we will prove that the invariant mentioned in line ?? of
+the ``Basic Algorithm'' is indeed true.  That is, $E(|S|) = k$ at the
+top of the ``for loop''.  We will also bound the variance of the size
+of $S$. These results are needed to show the memory and CPU resources
+consumed by this algorithm are roughly similar to (or better than)
+other algorithms in the KMV family.
+
+In section ?? we will analyze a different estimator $X=|S|/\alpha^i$ 
+which is related to the ``practical'' version of our setops scheme. 
+This analysis will re-use the technical lemma about the function ``$g()$'', and will 
+also re-use the analysis of the size of the set $S$.
+
+In section ?? we will analyze yet another estimator $Y$ which is related to
+the ``theoretical'' version of our setops scheme. This analysis
+will re-use the technical lemma about the function ``$g()$''.
+
+
+\subsection{Groundwork for the Analysis}
+
+In this section we lay the groundwork for the next section's analysis
+of the estimator $Z = k / \alpha^i$.
+
+% In this section and the next one, we will simplify the presentation by
+% noting that aside for allowing duplicates to be detected and removed,
+% the set $S$ plays no role in the computation of the estimator $Z$. We
+% would get the same answer by feeding an {\em already} de-duplicated stream
+% of hashes into Algorithm 2, which is the same as Algorithm 1 except that
+% there is no set $S$ available for doing the (now unnecessary) de-duplication.
+
+% \begin{algorithm}[t]
+% \caption{Simplified Code for Analyzing Estimator Z}
+% \label{alg:counting-algorithm}
+% \begin{algorithmic}[1]{\footnotesize
+% \STATE Inputs: (target size $k$, StreamOfUniqueHashValues).
+% \STATE Skip the first $k$ items in StreamOfUniqueHashValues.
+% \STATE $\alpha \leftarrow k/(k+1)$.
+% \STATE $i \leftarrow 0$.
+% \FORALL{$h$ in restOfStreamOfUniqueHashValues}
+% \IF{$h < \alpha^i$}
+% \STATE $i \leftarrow i + 1$.
+% \ENDIF
+% \ENDFOR
+% \STATE Output the estimate $Z = k / \alpha^i$.
+% }\end{algorithmic}
+% \end{algorithm}
+
+We need to establish some assumptions and some notation. For the
+purposes of the analysis, we are assuming that the hash function
+produces perfectly random real values on the interval $[0,1)$.  Hence
+the probability of a hash collision is zero. The symbol $n$
+denotes the number of unique identifiers in the input stream. All of
+the algorithms in this section handle the first $k$ unique
+identifiers during an initialization phase. Hence the number of unique
+identifers processed by the main loop of each algorithm is $u = n - k$.
+The symbol $\alpha$ always denotes the fraction $k/(k+1)$.
+
+\subsubsection{The distribution \;Pr(\;i\;|\;u\;)}
+% $\mathrm{Pr}(\;i\;|\;u)$}
+Now, let us analyze the probability distribution $Pr(i|u)$ which
+governs the distribution of the final value of $i$ when one runs
+% either the basic algorithm or the simplified algorithm
+the basic algorithm
+on a stream containing $n = k + u$ unique identifiers. We will characterize this
+distribution via a recurrence and base cases.  The base cases are 
+easy to see. If $u = 0$, then the algorithm's ``for loop'' is skipped,
+and the final value of $i$ is zero. Hence $Pr(i=0|u=0) = 1$, and $Pr(i |u=0) = 0, \forall i > 0$.
+On the other hand, if $u > 0$, then the body of the ``for loop'' will be
+executed at least once, and the test in line ?? will succeeed at least once
+(because a random value from $[0,1)$ must be less than $1 = \alpha^0$).
+Therefore $i \geq 1$, so for all $u > 0$, $Pr(i=0 |u) = 0$.
+
+The recurrence can be worked out by considering a state space in which the pair $(i,u)$
+means that $i$ increments have occured, and  $u$ unique hash values have been processed.
+
+Suppose that the algorithm ends up in state $(i, u)$. Before processing the final
+unique hash value and reaching this state, the algorithm must have been in one of 
+two states: either $(i, u-1)$, or $(i-1, u-1)$. We will make the
+induction hypothesis that we already know the probabilities of reaching those two states.
+
+Now we need to know the probability of transitioning from 
+$(i, u-1)$ to $(i, u)$, and the probability of transitioning from 
+$(i-1, u-1)$ to $(i, u)$.
+
+A transition from $(i, u-1)$ to $(i, u)$ occurs when the test in line ??
+fails, that is, when $h \geq \alpha^i$.
+Because $h$ is a uniform random variable on $[0,1)$, this happens
+with probability $(1 - \alpha^i)$. Hence the probability of reaching state $(i,u)$ 
+by going through state $(i, u-1)$ is $(1 - \alpha^i)$ times 
+the probability of reaching state $(i,u-1)$.
+
+A transition from $(i-1, u-1)$ to $(i, u)$ occurs when the test in line ??
+succeeds, that is, when $h < \alpha^{i-1}$.
+Because $h$ is a uniform random variable on $[0,1)$, this happens
+with probability $\alpha^{i-1}$.
+Hence the probability of reaching state $(i,u)$ 
+by going through state $(i-1, u-1)$ is $(1 - \alpha^i)$ times 
+the probability of reaching state $(i-1,u-1)$.
+
+The total probability of reaching (and hence ending up in) state $(i,u)$ is then 
+the sum of the probabilities of reaching it via these two routes. 
+This establishes the recurrence, which we now explicitly state
+along with the above-mentioned base cases:
+\begin{align}
+\mathrm{Pr}(0 | 0) = & 1 \\
+\mathrm{Pr}(i | 0) = & 0, \quad \forall i > 0 \\
+\mathrm{Pr}(0 | u) = & 0, \quad \forall u > 0 \\
+\mathrm{Pr}(i | u) = & (1 - \alpha^i) \cdot \mathrm{Pr}(i | u\!-\!1) \; + \\
+ & \quad \quad  \alpha^{i\!-\!1} \cdot \mathrm{Pr}(i\!-\!1 | u\!-\!1), \quad \forall i\!>\!0, \forall u\!>\!0
+\end{align}
+
+\subsubsection{The Function g(q,k,u)}
+
+The analysis of the Estimator Z involves several summations involving
+the probability distribution $Pr(i|u)$. As part of the groundwork for
+that analysis, we will prove a technical lemma about a function
+$g(q,k,u)$ which encodes the values of those summations.  This section
+is completely technical and can be safely skipped by readers who are
+more interested in the high-level story than in the details of the proofs.
+Here is the definition of $g(q,k,u)$:
+
+\begin{equation}
+g(q,k,u) = \sum_{i=0}^u \frac{1}{\alpha^{qi}} \mathrm{Pr}(i|u)
+\end{equation}
+
+% \noindent We remind readers that $\alpha = k/(k+1)$.
+
+\noindent {\bf Technical Lemma:} The function $g(q,k,u)$ defined by equation ??
+satisfies the following base cases and recurrence:
+\begin{align}
+g(0,k,u) = & \;1 \\
+g(q,k,0) = & \;1 \\
+g(q,k,u\!+\!1) = & g(q,k,u) + \left(\frac{1-\alpha^q}{\alpha^q}\right) \cdot g(q\!-\!1,k,u)
+\end{align}
+\begin{proof}
+The base cases can be verified by inspection. The recurrence can be derived from the
+recurrence for $Pr(i|u)$ as follows:
+\begin{align} 
+  g(q,k,u\!+\!1)
+= & \sum_{i=0}^{u+1} \frac{1}{\alpha^{qi}} \mathrm{Pr}(i|u+1) \\
+= & \left[ \sum_{i=0}^{u} \frac{1}{\alpha^{qi}} (1-\alpha^i) \mathrm{Pr}(i|u) \right] + 0 \\
+  & \quad + 0 + \left[ \sum_{i=1}^{u+1} \frac{1}{\alpha^{qi}} (\alpha^{i-1}) \mathrm{Pr}(i\!-\!1|u) \right]
+\end{align} 
+\noindent Now we will consider the two bracketed sums. For the first one:
+\begin{align} 
+  & \sum_{i=0}^{u} \frac{1}{\alpha^{qi}} (1-\alpha^i) \mathrm{Pr}(i|u) \\
+= & \sum_{i=0}^u \frac{1}{\alpha^{qi}} \mathrm{Pr}(i|u) - \sum_{i=0}^u \frac{\alpha^i}{\alpha^{qi}} \mathrm{Pr}(i|u) \\
+= & g(q,k,u) - \sum_{i=0}^u \frac{1}{\alpha^{(q-1)i}} \mathrm{Pr}(i|u) \\
+= & g(q,k,u) - g(q-1,k,u).
+\end{align}
+\noindent For the second one: % performing the change of variables $j = i\!-\!1$:
+\begin{align} 
+  & \sum_{i=1}^{u+1} \frac{1}{\alpha^{qi}} (\alpha^{i-1}) \mathrm{Pr}(i\!-\!1|u) \\
+= & \sum_{j=0}^{u} \frac{1}{\alpha^{q(j+1)}} (\alpha^{j}) \mathrm{Pr}(j|u) \\
+= & \frac{1}{\alpha^q}\sum_{j=0}^{u} \frac{1}{\alpha^{(q-1)j}} \mathrm{Pr}(j|u) \\
+= & \frac{1}{\alpha^q} g(q-1,k,u).
+\end{align}
+\noindent Adding ?? and ?? yields the claimed result:
+\begin{align} 
+  & g(q,k,u) - g(q-1,k,u) + \frac{1}{\alpha^q} g(q-1,k,u) \\
+= & g(q,k,u) + \left(\frac{1-\alpha^q}{\alpha^q}\right) \cdot g(q\!-\!1,k,u)
+\end{align}
+\end{proof}
+
+\noindent {\bf Corollaries of Technical Lemma}: For all integers $u \geq 0$: 
+\begin{align}
+% g(0,k,u) = & \;1 \\
+g(1,k,u) = & \;\frac{k+u}{k} \\
+g(2,k,u) = & \;\frac{k^3 + 2 k^2 u + ku^2 + u(u\!-\!1)/2}{k^3}
+\end{align}
+\begin{proof}
+$\frac{k+u}{k}$ satisfies the same base case and recurrence as $g(1,k,u)$.
+The base case (eqn ??) can be verified by inspection. The recurrence (eqn ??) can be verified as follows:
+\begin{equation}
+\frac{k+(u+1)}{k} = \frac{k+u}{k} + \frac{1-\alpha}{\alpha} \cdot 1 = \frac{k+u}{k} + \frac{1}{k}.
+\end{equation}
+$\frac{k^3 + 2 k^2 u + ku^2 + u(u\!-\!1)/2}{k^3}$ satisfies the same base case and recurrence as $g(2,k,u)$.
+The base case (eqn ??) can be verified by inspection. The recurrence (eqn ??) can be verified as follows:
+\begin{align}
+   & g(2,k,u) + \left(\frac{1-\alpha^2}{\alpha^2}\right) \cdot g(1,k,u) \\
+ = & g(2,k,u) + \frac{1}{\alpha^2} \cdot \frac{k+u}{k} - \frac{k+u}{k} \\
+ = & g(2,k,u) + \frac{(k+1)^2}{k^2} \cdot \frac{k+u}{k} - \frac{k+u}{k} \\
+ = & g(2,k,u) + \frac{2k^2+k+2uk+u}{k^3} \\
+ = & \frac{k^3 + 2k^2u +2k^2 + ku^2 + 2uk + k + \frac{1}{2} u^2 + \frac{1}{2} u}{k^3} \\
+ = & \frac{k^3 + 2k^2(u+1) + k(u+1)^2 + (u+1)u/2}{k^3} \\
+ = & g(2,k,u+1).
+\end{align}
+\end{proof}
+
+
+
+\subsection{Analysis of the Estimator Z}
+
+\subsubsection{Mean and Variance}
+
+The expected value and variance of the estimator $Z = k / \alpha^i$ can be computed
+with the help of the above technical lemma:
+
+\begin{align}
+ E(Z|k,u)  = & \sum_{i=0}^{u}\frac{k}{\alpha^i} \cdot \mathrm{Pr}(i|u) \\
+  = & k \cdot g(1,k,u) = k\cdot\frac{k+u}{k} = n \\
+\vspace{0.75em}
+ E(Z^2|k,u) = & \sum_{i=0}^{u}\frac{k^2}{\alpha^{2i}} \cdot \mathrm{Pr}(i|u) \\
+  = & k^2 \cdot g(2,k,u) \\
+  = & \frac{k^3 + 2k^2u + ku^2 + u(u-1)/2}{k} \\
+  = & \frac{u(u-1)/2}{k} + n^2 \\
+\vspace{0.75em}
+ \sigma^2(Z|k,u) = & E(Z^2|k,u) - n^2 \\
+                 = & \frac{u(u-1)}{2k} \\
+                 = & \frac{n^2-2nk+k^2-n+k}{2k} \\
+                 < & \frac{n^2}{2k}\quad \mathrm{for\;large} \; \frac{n}{k}.
+\end{align}
+
+\subsubsection{Discussion}
+
+The variance of Estimator Z is smaller by a factor of 2 than that of other ``KMV class'' 
+algorithms such as KMV itself, Giroire's generalizations of KMV,
+various algorithms that sample using a decreasing threshold such as Gibbons and
+our our own estimator X, and even sampling with the ``ideal'' fixed
+fixed threshold $\theta = k / n$. But why, exactly? We do not know yet.
+
+\subsubsection{Higher Moments and Confidence Intervals}
+
+Anirban will produce this material.
+
+\subsection{Analysis of the Size of S}
+% so we need to return from the ``Simplified'' Algorithm 2 to the ``Basic'' Algorithm 1. 
+% Now we are going to focus on size of the set $S$
+
+We will now show that the expected value of $|S|$ is $k$, and its variance
+is upper bounded by $k/2 + 1/4$. These results are needed to establish that our
+basic algorithm is practical, and also to show that estimator $Z$ is achieving
+lower variance than other KMV-like algorithms while collecting roughly the same
+number of hash values in its sample.
+
+\subsubsection{Intuitive Discussion}
+
+Before getting to the actual analysis, we mention that the variance of $|S|$
+is smaller than one might expect from a couple of plausible-sounding but 
+inaccurate analogies for what is going on.
+
+The first inaccurate analogy is that the mechanism governing the size of 
+$S$ resembles sampling with a fixed threshold $\theta = k/n$. However,
+for $n \gg k$, that analogy suggests that $|S|$ has a Poisson distribution; 
+the resulting variance of $k$ is too big by a factor of 2.
+
+The second inaccurate analogy assumes that the mechanism is essentially an ordinary random walk in which each step is caused by the
+combined effect of lines ?? and ??. However, that would cause the variance of $|S|$ to keep growing forever as $n$ increases;
+that answer is wrong by an unbounded factor.
+
+A third analogy is only a little bit inaccurate, namely that the size
+of $S$ is governed by a certain AR(1) process, namely a random walk
+whose steps are determined by a linear restoring force plus noise.
+The linear restoring force arises from the fact that line ?? always
+inserts exactly one item, but the expected number of items deleted by
+line ?? is less than 1 if $|S| < k$, and more than 1 if $|S| > k$.
+When an approximate description of our process consisting of the
+actual restoring force plus an approximation of the noise distribution
+is plugged into a basic theorem about $AR(1)$ processes, an answer
+close to $k/2$ pops out for the ``steady state'' variance of the size
+of $S$. This is close to the true answer.
+
+\subsubsection{The Actual Analysis}
+
+In this section we will put aside the above intuitive arguments and
+do a proper analysis of the distribution governing $|S|$. This can be done
+by analyzing two survival processes, a process {\bf K} governing the
+$k$ items which were inserted into $S$ by line ?? of Algorithm ??, and
+a process {\bf I} governing the $i$ items which were inserted into $S$
+by line ?? of the algorithm.
+
+\vspace{0.5em}
+\noindent {\bf Process K:} A hash value $h$ inserted into $S$ by line ?? ends up in the final set $S$ if and only it survives the
+$i$ rounds of deletion which subsequently occur in line ??. Since the test in line ?? becomes monotonically more stringent
+in successive deletion rounds, this will happen if and only $h$ can survive the final round of deletion, where the test is
+$h < \alpha^i$. Because $h$ is a uniform random variable on $[0,1)$, this occurs with probability $\alpha^i$.
+Furthermore, because the $h$'s are iid uniform random variables, the indicator variables for their
+respective survivals are iid Bernoulli random variables, and the total
+number of survivors amongst the $k$ initial members of $S$ is governed by the Binomial Distribution with $k$ draws and
+probability $\alpha^i$. Hence the expected number of survivors of process {\bf K} is $k \cdot \alpha^i$, and the variance is $k \cdot \alpha^i \cdot (1 - \alpha^i)$.
+
+\vspace{0.5em}
+\noindent {\bf Process I:} This process is not governed by a Binomial
+Distribution, because the survival probabilities of the $i$ hashes
+inserted by line ?? are all different. 
+In all cases, ultimate survival is determined
+by same final test $h < \alpha^i$ (in line ??); the explanation
+for the differing survival probabilities is that each hash value
+passed a different test (in line ??) upon entering the set $S$.
+For example, consider the final hash value to enter
+the set $S$. Because it passed the entry test $h < \alpha^{i-1}$ in
+line ??, it passes the final deletion test $h < \alpha^i$ with
+probability $\alpha^i/\alpha^{i-1} = \alpha^1$. Similarly, the
+second-to-last hash value to enter the set $S$ passes the final
+test with probability $\alpha^i/\alpha^{i-2} = \alpha^2$.  Overall, the survival
+of the $i$ hash values can be modelled by $i$ iid Bernoulli
+random variables whose respective probabilities are $\alpha^1,
+\alpha^2, \ldots, \alpha^i$. The expected number of survivors of
+process {\bf I} is $\sum_{j=1}^{i} \alpha^j$, and the variance is
+$\sum_{j=1}^{i} \alpha^j (1 -\alpha^j)$.
+
+Now, because all of the survival events are independent, the probability distribution governing the
+size of $S$ is the sum of the probability distributions governing process {\bf K} and process {\bf I}.
+Therefore:
+\begin{align}
+E(|S|) = & k \cdot \alpha^i + \sum_{j=1}^{i} \alpha^j 
+       = k \cdot \alpha^i + \frac{\alpha - \alpha^{i+1}}{1 - \alpha} \\
+       = & k.     
+\end{align}
+\begin{align}
+\sigma^2(|S|) = & k \cdot \alpha^i \cdot (1 - \alpha^i) + \sum_{j=1}^{i} \alpha^j (1 -\alpha^j) \\
+              = & k \;\alpha^i \;(1 - \alpha^i) \\
+                & \quad + \frac{\alpha + \alpha^{2(i+1)} - \alpha^{i+2} - \alpha^{i+1}}{1 - \alpha^2} \\
+             = & \frac{\alpha - \alpha^{2i+1}}{1 - \alpha^2} \\
+             = & \frac{\alpha}{1-\alpha^2}(1-\alpha^{2i}) \\
+             < & \frac{\alpha}{1-\alpha^2} \\
+             = & \frac{k^2+k}{2k+1} \\
+             < & \frac{k}{2} + \frac{1}{4}.
+\end{align}
+% k \cdot \alpha^i
+% k \cdot \alpha^i \cdot (1 - \alpha^i)
+% \sum_{j=1}^{i} \alpha^j
+% \sum_{j=1}^{i} \alpha^j (1 -\alpha^j)
+
+\subsection{Analysis of the Estimator X}
+
+Our basic algorithm outputs not only the stand-alone estimator $Z = k
+/ \alpha^i$, but also the theta sketch $(\theta = \alpha^i, S)$ which
+is stored in the sketch mart for later use in set expressions. Very
+roughly speaking, the accuracy of a set expression estimate is
+determined by combination of the estimator $X = |S| / \alpha^i$ and a
+penalty factor which grows worse as the true answer grows smaller
+relative to the size of the streams. We will discuss the penalty
+factor later; right now we will analyze the estimator $X$. We will
+prove that $X$ is unbiased, and that the variance of $X$ is slightly
+less than the variance of KMV.
+
+In the following, $B$ is the random variable for the size of $|S|$.
+
+\begin{align}
+ & E(X | k, u)  \\
+= & \sum_{i=0}^u \sum_{b=0}^{k+i}
+\frac{b}{\alpha^i} \cdot \mathrm{Pr}(B \!=\! b | k, i) \cdot
+\mathrm{Pr}(I \!=\! i | u) \\
+= &\sum_{i=0}^u \frac{1}{\alpha^i} \mathrm{Pr}(I \!=\! i | u) \cdot 
+\sum_{b=0}^{k+i} b \cdot \mathrm{Pr}(B \!=\! b | k, i) \\
+= & \sum_{i=0}^u \frac{1}{\alpha^i} \mathrm{Pr}(I \!=\! i | u) \cdot k \\
+= & k \cdot g(1,k,u) = k \cdot \frac{k+u}{k} = k + u \\
+= & n.
+\end{align}
+
+% \vspace{1.5em}
+
+\begin{align}
+ & E(X^2 | k, u) \\
+= & \sum_{i=0}^u \sum_{b=0}^{k+i} \left( \frac{b}{\alpha^i} \right)^2 \mathrm{Pr}(b|k,i) \; \mathrm{Pr}(i|u) \\
+= & \sum_{i=0}^u \frac{1}{\alpha^{2i}} 
+\mathrm{Pr}(i|u)
+\sum_{b=0}^{k+i} b^2 
+\mathrm{Pr}(b|k,i) \\
+= & \sum_{i=0}^u \frac{1}{\alpha^{2i}} 
+\mathrm{Pr}(i|u)
+\left(  \frac{\alpha-\alpha^{2i+1}}{1-\alpha^2} + k^2  \right) \\
+= & \frac{1}{1-\alpha^2} 
+\left[
+\alpha \sum_{i=0}^u \frac{1}{\alpha^{2i}} \mathrm{Pr}(i|u) -
+\sum_{i=0}^u \alpha \mathrm{Pr}(i|u)
+\right] \\
+ & \quad \quad + k^2 \sum_{i=0}^u \frac{1}{\alpha^{2i}} \mathrm{Pr}(i|u) \\
+= & \frac{1}{1-\alpha^2} 
+\left[ \alpha \cdot g(2,k,u) - \alpha \cdot 1 \right] + k^2 g(2,k,u) \\
+= & (\frac{\alpha}{1-\alpha^2} + k^2) \cdot g(2,k,u) - \frac{\alpha}{1-\alpha^2} \\
+= & \frac{k(2k^2+2k+1)}{2k+1}
+\cdot g(2,k,u) - 
+\frac{k(k+1)}{2k+1} \\
+= & \frac{
+\left(\begin{array}{c}
+2k^5 + 4k^4u + 2k^3u^2 + 3k^2u^2 + k^4 + 4k^3u \\
+\quad \quad \quad + 2ku^2 + k^2u - ku + u(u-1)/2
+\end{array}\right)
+}{k^2 (2k+1)} \\
+= & \frac{k^2u + ku^2 + u(u\!-\!1)/2 + k^4 + 2k^3u + k^2u^2}{k^2}.
+\end{align}
+
+% \vspace{1.5em}
+
+\begin{align}
+ \sigma^2 (X|k,u) 
+ = & E(X^2|k,u) - E^2(X|k,u) \\
+ = & \frac{k^2u + ku^2 + u(u\!-\!1)/2}{k^2} \\
+ = & \frac{(2k+1)n^2 - (2k^2+2k+1)n + (k^2+k)}{2k^2} \\
+       \rightarrow & \frac{(2k+1)n^2}{2k^2} \\
+ = & \frac{n^2}{k-\frac{k}{2k+1}} \\
+ < & \frac{n^2}{k-\frac{1}{2}}.
+\end{align}
+
+
+\subsection{Analysis of the Estimator Y}
+
+Although our actual sketch mart system computes estimates for set expressions
+from theta sketches produced by the Basic Algorithm, and this works
+fine in practice (see the experiments section below), it appears
+that a formal analysis of the resulting errors would be very complicated.
+
+So, strictly for the purposes of enabling a simple error analysis for
+set expressions, we now present a modified version of the basic
+algorithm, which produces a different theta sketch $(\theta_1 = \alpha^i,
+S_2)$, and a corresponding estimator $Y = |S_2| / \theta_1$. We will
+prove that $Y$ is unbiased, and that the variance of $Y$ is slightly
+less than the variance of KMV.
+
+The modification consists of a second pass over the stream, using a
+second hash function that is independent of the first hash function.
+During this second pass, we collect into the set $S_2$ all (second) hash
+values that are less than the threshold $\theta_1 = \alpha^i$ that was computed
+using the first hash function.\footnote{It is not hard to figure out how to obtain the same
+output using a {\em single} pass using both hash functions. However, the
+resulting algorithm would still be twice as expensive as the
+unmodified basic algorithm in terms of both memory and CPU; that is
+why we don't actually do it in practice.} This extra work ensures that
+the theta-sketch's threshold $\theta_1$ and sample set $S_2$ are independent.
+This causes the size of $S_2$ to be governed by the Binomial distribution
+with $n$ throws and probability $\theta_1$, which greatly simplifies the
+error analysis for set expressions. First, though, we will analyse the single-sketch
+estimator $Y = |S_2| / \theta_1$.
+
+In the following, $C$ is the random variable for the size of $|S_2|$.
+
+\begin{align}
+ & E(Y|k,u)  \\
+= &    \sum_{i=0}^u    \sum_{c=0}^{n}    \frac{c}{\alpha^i}   \cdot \mathrm{Pr}(C = c|n,i)   \cdot \mathrm{Pr}(i|u) \\
+= &    \sum_{i=0}^u  \frac{1}{\alpha^i}  \mathrm{Pr}(i|u)  \cdot \sum_{c=0}^{n} c \; \mathrm{BinomialPMF}(c|n,\alpha^i) \\     % \mathrm{Pr}(c|n,i)  
+= &    \sum_{i=0}^u  \frac{1}{\alpha^i}  \mathrm{Pr}(i|u)  \cdot n \; \alpha^i \\
+= & n \cdot \sum_{i=0}^u \mathrm{Pr}(i|u) = n.
+\end{align}
+
+\begin{align}
+  & E(Y^2|k,u)  \\
+= &    \sum_{i=0}^u    \sum_{c=0}^{n}    \frac{c^2}{\alpha^{2i}}   \cdot \mathrm{Pr}(C = c|n,i)   \cdot \mathrm{Pr}(i|u) \\
+= &    \sum_{i=0}^u  \frac{1}{\alpha^{2i}}  \mathrm{Pr}(i|u)  \cdot \sum_{c=0}^{n} c^2 \; \mathrm{BinomialPMF}(c|n,\alpha^i) \\     % \mathrm{Pr}(c|n,i)  
+= &    \sum_{i=0}^u  \frac{1}{\alpha^{2i}}  \mathrm{Pr}(i|u)  \left[ n \alpha^i - n \alpha^{2i} + n^2 \alpha^{2i} \right] \\
+= &  n \sum_{i=0}^u  \frac{1}{\alpha^{i}} \mathrm{Pr}(i|u) - n \sum_{i=0}^u \mathrm{Pr}(i|u) + n^2 \sum_{i=0}^u \mathrm{Pr}(i|u) \\
+= & n \cdot g(1,k,u) - n + n^2 \\
+= & \frac{n^2}{k} - n + n^2.
+\end{align}
+
+\begin{align}
+ \sigma^2(Y|k,u) = E(Y^2|k,u) - n^2 = \frac{n^2}{k} - n.
+\end{align}
+
+Interestingly, this is the same variance as the fixed threshold algorithm run with $\theta = \frac{k}{n}$.
+However, the two distributions are {\em not} actually the same, despite having the same mean and variance.
+
+% \noindent line ?? is because $E(c^2) = \sigma^2(c) + E^2(c) = np(1-p) + (np)^2$.
+
+\section{Implementation of Basic Algo}
+
+The writeup in this section is somewhat out of date.
+
+\subsection{Cost of Executing the Algorithm}
+
+We will now analyze the execution cost of Algorithm 1, assuming that the
+set S is implemented using a hash table of size $c_h \cdot k$, and
+assuming that this hash table supports $O(1)$-cost lookup and insert operations.
+% \footnote{The actual constant factor in this $O(1)$ depends on the
+% specific type of hash table, and also on the headroom factor $c_h$.}
+% \footnote{The hash table doesn't need to support $O(1)$
+% deletions of specific items; we can't get our hands on those items
+% anyway without the priority queue.} 
+
+Suppose that the stream contains $D$ duplicate hashes in addition
+to the $n$ unique hashes that we have been assuming so far. The cost of processing
+these is $O(D)$; this cost is incurred in lines 1-9.
+
+Now, let us consider the $n=w+u$ unique
+hashes in the stream.  These incur a cost of $O(n)$ in lines 1-9. 
+In addition, $t$ of the $u$ unique hashes processed by the main loop
+make it past line 9 and cause the sketch to be updated in lines 10-12. We will not
+formally analyze the number of updates $t$, focusing instead on the cost of
+performing each update.\footnote{Informally, $E(t)$ is roughly 
+$k \ln (\frac{u+k}{k})$ for large $k$ (assuming that $\alpha = \frac{k}{k+1}$).
+This is similar to the number of updates performed by the heap-based KMV algorithm.}
+% [cite Beyer] could have tightened their bound on the cost of the heap-based algorithm
+% by including the division by $k$ inside the logarithm.}
+
+Clearly, each update incurs an $O(1)$ cost in lines 10 and 11. 
+However, line 12 is a problem. We want to delete from $S$ those
+hashes that are not less than the newly reduced $\theta$. Even if the
+hash table had an $O(1)$-cost deletion operation, we could not easily 
+use it; without the priority queue we do not know of an inexpensive way 
+to immediately locate the specific items that need to be deleted.
+
+Our solution to this problem is to leave the ``deleted'' items in the hash table for a while.
+They are eventually removed during occasional rebuilds of the hash table. Each rebuild costs $O(k)$,
+so we need to make sure that the table isn't rebuilt more often than once per $O(k)$ inserts.
+Having ensured that, the lazy version of line 12 has an amortized cost of $O(1)$, and we are done.
+
+\subsubsection{Further Discussion of the Lazy Algorithm}
+
+Pseudocode for the lazy version of our algorithm is shown in figure 2. Instead of maintaining the 
+set S exactly, this version maintains a set $T \supseteq S$ which not only contains $S$ but also
+some other hashes that are bigger than $\theta$ but haven't been deleted yet by the next rebuild of the 
+hash table which implements $T$.
+
+Because the algorithm is tracking the larger set $T$ but needs to return the size of $S$ in line 6, 
+some extra work is needed there; one must count the number of elements of $T$ which are less than the current
+value of $\theta$.
+
+Now we will discuss the set size $c_r \cdot k$ which triggers a rebuild of the hash table implementing $T$.
+Recall that $c_b \cdot k$ is a high probability upper bound on the maximum size that $S$ an attain during the 
+execution of the algorithm, and that $c_h \cdot k$ is the number of slots in the actual hash table. The value
+of $c_r$ needs to satisfy $c_b < c_r < c_h$, ideally with a large gap at each inequality.
+
+The gap in the inequality $c_r < c_h$ ensures that the hash table's occupancy never becomes too large,
+thus improving the constant factor in the assumed $O(1)$ cost of hash table operations.
+
+The gap in the inequality $c_b < c_r$ ensures that table rebuilds do not occur too often, thus improving the constant
+factor in the $O(1)$ amortized cost of line 12.
+
+\begin{algorithm}[t]
+\caption{Basic Algorithm with Lazy Deletion$(\mathcal{H},k,c_r)$}
+\label{alg:basic-algo-lazy}
+\begin{algorithmic}[1]{\footnotesize
+\STATE $\alpha = k/(k+1)$.
+\STATE $T \leftarrow\;$ (First $k$ unique hashes in $\mathcal{H}$).
+\STATE $ \theta \leftarrow 1.0 $
+\STATE {\bf Loop:}
+% \STATE \COMMENT{Invariant: $E(|T|) >= \alpha/(1-\alpha)$}.
+% \STATE \COMMENT{Invariant: $T$ contains at least all $h < \theta$ seen so far in $\mathcal{H}$}.
+\STATE \COMMENT{Invariant: $T \supseteq S$}.
+% \STATE \COMMENT{Invariant: $|S| \le |T| < c_r \cdot k$}.
+\STATE {\bf if} no more hashes in $\mathcal{H}$, {\bf return} $(\theta,|\{(h < \theta) \in T\}|)$.
+% \STATE Answer pending queries using $(\theta, |\{(h < \theta) \in T\}|)$.
+\STATE $h \leftarrow\;$ next hash in $\mathcal{H}$.
+\STATE {\bf if} $h \ge \theta$ {\bf goto Loop}.
+\STATE {\bf if} $h \in T$ {\bf goto Loop}.
+\STATE $T \leftarrow T \cup \{h\}$.
+\STATE $\theta \leftarrow \alpha \cdot \theta$.
+\STATE {\bf if} $|T| >= c_r \cdot k$ {\bf then} $T \leftarrow \{(h < \theta) \in T\}$.
+\STATE {\bf goto Loop.}
+}\end{algorithmic}
+\end{algorithm}
+
+\section{Implementation}
+
+Now that we have Algorithm 2, the main thing to decide is the specific kind of hash table
+to use in the actual implementation. The following factors influenced our decision.
+
+\begin{tighterenumerate}
+
+\item Because the items to be stored are themselves hash values, a simple array of hash values accessed via open addressing is
+more space efficient than a library hash table that stores items, keys, and perhaps hashed keys.
+\item Because we employ high quality hash functions (City Hash and Murmur Hash)
+that have good randomness in not only the high but also the low
+bits of the hash values, we can safely use open addressing with a power-of-two hash table size, thus 
+allowing us to probe the table using masked-off low bits of the hash values.
+\item Because our algorithm is already handling deletions lazily via occasional table rebuilds,
+the hash table does not need to support the efficient deletion of specific items. Hence we are
+free to use a double hashing version of open addressing which gracefully handles high load factors
+that permit the rebuilds to be done less often.
+\end{tighterenumerate}
+
+\subsection{Optimizations}
+
+There is some redundant work in Algorithm 2 which can be avoided by
+using a single sequence of probes to achieve the combined effect of
+the lookup operation in line 9, and the possible insert in line 10.
+
+As a further optimization, one can cause rebuilds to happen less often
+by modifying the implementation of the insert operation so that
+whenever possible it overwrites an ``expired'' item (that is, an $h$ that is
+not less than the current threshold) instead of filling up a previously empty
+slot. 
+
+Pseudocode which reflects both of these optimizations appears as
+Algorithm 3. There are some tricky details involved in the implementation
+of the procedure OptimizedLookup().\footnote{Similar issues are thoroughly discussed in
+d in Section ?? of ??.}
+In particular, because we are using double hashing, and because the overwriting insert
+operation treats expired hashes as if they were already deleted, the necessary
+sequence of probes for the lookup and for the insert are not quite the same. This is
+because the expired hashes are stepping stones
+which preserve the connectivity of the chains of probes leading to other hashes in the table.
+
+Let $h$ be the second argument to OptimizedLookup (). Then the lookup operation's sequence of probes cannot stop until
+it finds $h$ or reaches a slot that is actually empty. However, the insert operation's sequence of probes
+can stop upon reaching either an empty slot or a slot containing an expired hash.
+
+Our method of obeying both of these rules with a single sequence of probes is to keep going
+until reaching $h$ or an empty slot. However, during this sequence of probes, if the procedure
+notices any slot containing an expired hash, it remembers the first such slot. At the end
+of the sequence of probes, OptimizedLookup() returns (true,null) if it found $h$, or 
+(false,locationOfFirstExpiredHash) if it noticed any expired hashes, else 
+(false,locationOfEmptySlot).
+
+One final detail is that we are calling OptimizedLookup() with the
+third argument $\alpha \cdot \theta$, so it considers any $h \ge
+\alpha \cdot \theta$ to be expired. This is anticipating the reduction in 
+$\theta$ that will occur in line 13 on the code path which is executed in the
+event that $h$ is not found in the table, and is therefore inserted, and therefore needs
+a slot to be inserted into.
+This code is correct even in the strange-seeming case where an $h$ satisfying
+$\alpha \cdot \theta \le h < \theta$ is inserted into the table, possibly overwriting another 
+$\alpha \cdot \theta \le h'$.
+
+
+\begin{algorithm}[t]
+\caption{Optimized Algorithm With Lazy Deletion $(\mathcal{H},k,c_r)$}
+\label{alg:optimized-algo}
+\begin{algorithmic}[1]{\footnotesize
+\STATE $\alpha = k/(k+1)$.
+\STATE $T \leftarrow\;$ (First $k$ unique hashes in $\mathcal{H}$).
+\STATE $ \theta \leftarrow 1.0 $
+\STATE {\bf Loop:}
+\STATE \COMMENT{Invariant: $T \supseteq S$}.
+\STATE {\bf if} no more hashes in $\mathcal{H}$, {\bf return} $(\theta,|\{(h < \theta) \in T\}|)$.
+\STATE $h \leftarrow\;$ next hash in $\mathcal{H}$.
+\STATE {\bf if} $h \ge \theta$ {\bf goto Loop}.
+% \STATE $(foundIt,InsertHere) \leftarrow \mathrm{fancyCheckTable}(T,h,\alpha \cdot \theta)$.
+\STATE $(foundIt,InsertHere) \leftarrow \mathrm{OptimizedLookup}(T,h,\alpha \cdot \theta)$.
+\STATE {\bf if} $foundit$ {\bf goto Loop}.
+% \STATE $T \leftarrow T \cup \{h\}$.
+\STATE {\bf if} $\mathrm{Empty}(TableSlot[InsertHere])\;\mathbf{then}\; |T| \leftarrow |T|\!+\!1$.
+\STATE $TableSlot[InsertHere] \leftarrow h$.
+\STATE $\theta \leftarrow \alpha \cdot \theta$.
+\STATE {\bf if} $|T| >= c_r \cdot k$ {\bf then} $T \leftarrow \{(h < \theta) \in T\}$.
+\STATE {\bf goto Loop.}
+}\end{algorithmic}
+\end{algorithm}
+
+
+
+\section{Analysis of $Y$ estimator}
+\input{newanalysis}
+
+
+\end{document}
+
+
+
+
+
+
+
+
+We will now figure what are the transition probabilities
+
+There are only two possible
+states which could have preceded that one during the execution of the algorithm, namely
+
+
+
+
+is also fairly easy to see. Let the pair $(i,u)$ denote the state
+in which 
+Suppose the algorithm is in the state $(i,u)$, meaning that $i$ increments
+have occured, and $u$
+
+we end up in the state $(i,u)$, meaning that $i$ increments
+have occurred, and $u$ un
+
+There are only two ways
+that the algorithm can end up with a given value of $i$ after the main
+loop has processed $u$ unique hash values.  The difference lies in
+what happened when the $u$'th hash value (numbering from 1 to $u$) was
+processed. More specifically, there are two cases: $i$ was not
+incremented, or $i$ was incremented.
+
+Consider the case where $i$ was not incremented. Then we know that the
+test in line 6 failed, so $h \geq \alpha^i$. Since $h$ is uniformly distributed
+on $[0,1)$, this happens with probability $(1 - \alpha^i)$. Also, in the precursor
+state where $u$ was $u-1$, $i$ was already $i$. Hence the probability of being
+in the precursor state was $Pr(i|u-1)$, and the probability of reaching the
+final state via this route was $(1 - \alpha^i) \cdot Pr(i|u-1)$.
+
+Now consider the case where $i$ {\em was} incremented, and was therefore $i-1$
+when the $u$'th unique hash was processed. 
+Because $i$ was incremented, the test in line 6 succeeded, so $h \geq \alpha^{i-1}$. 
+Since $h$ is uniformly distributed on $[0,1)$, this happens with probability $\alpha^{i-1}$. 
+Also, the precursor state was $(i-1,u-1)$, so the probability of reaching the
+final state via this route was $\alpha^{i-1} \cdot Pr(i-1|u-1)$, and the 
+total probability of reaching the final state $(i,u)$ is 
+$(1 - \alpha^i) \cdot Pr(i|u-1) + \alpha^{i-1} \cdot Pr(i-1|u-1)$.
+
+
+
+
+
+
+\noindent {\bf Technical Lemma with q=1:} The function
+\[
+g(1,k,u) = \sum_{i=0}^u \frac{1}{\alpha^i} \mathrm{Pr}(i|u)
+\]
+satisfies the following base case and recurrence:
+\begin{align}
+      g(1,k,0) = & 1 \\
+g(1,k,u\!+\!1) = & g(1,k,u) + \left(\frac{1-\alpha}{\alpha}\right) \cdot 1
+\end{align}
+\begin{proof} The base case is true by inspection. The claimed recurrence is derived from equation ?? as follows:
+\begin{align} 
+  g(1,k,u\!+\!1)
+= & \sum_{i=0}^{u+1} \frac{1}{\alpha^i} \mathrm{Pr}(i|u+1) \\
+= & \left[ \sum_{i=0}^{u} \frac{1}{\alpha^i} (1-\alpha^i) \mathrm{Pr}(i|u) \right] + 0 \\
+  & \quad + 0 + \left[ \sum_{i=1}^{u+1} \frac{1}{\alpha^i} (\alpha^{i-1}) \mathrm{Pr}(i\!-\!1|u) \right]
+\end{align}
+\noindent Now we will evaluate the two bracketed sums, repeatedly noting that probability distributions sum to 1.
+For the first bracketed sum:
+\begin{equation}
+\sum_{i=0}^u \frac{1}{\alpha^i} \mathrm{Pr}(i|u) - \sum_{i=0}^u \frac{\alpha^i}{\alpha^i} \mathrm{Pr}(i|u) = g(1,k,u) - 1
+\end{equation}
+
+\noindent Next we evaluate the second bracketed sum, after performing the change of variables $j = i\!-\!1$:
+\begin{equation}
+\sum_{j=0}^{u} \frac{\alpha^j}{\alpha^{j+1}} \mathrm{Pr}(j|u) = \frac{1}{\alpha} \cdot 1
+\end{equation}
+
+Finally, combining ?? and ?? yields the claimed result:
+\begin{equation}
+  g(1,k,u\!+\!1) = g(1,k,u) - 1 + \frac{1}{\alpha} \cdot 1 = g(1,k,u) + \left(\frac{1-\alpha}{\alpha}\right) \cdot 1
+\end{equation}
+\end{proof}
+
+
+
